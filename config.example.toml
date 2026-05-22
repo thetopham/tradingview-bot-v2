@@ -1,0 +1,17 @@
+[mode]
+dry_run = true
+simulation_only = true
+broker_orders_enabled = false
+live_trading_enabled = false
+
+[data]
+supabase_url = "http://192.168.0.35:8000"
+feed_db = "feed/tradingview.sqlite3"
+
+[replay]
+default_slippage_bps = 1.0
+default_fee_per_trade = 0.0
+fill_model = "next_bar_open"
+
+[cron]
+watchdog_silent_on_ok = true
