@@ -79,6 +79,8 @@ python -m tvbot_v2.simulate --db data/sim_broker.sqlite reset epsilon --reason "
 
 The BUY above queues an intent. The earliest fill is the next contiguous 30-minute bar open. Duplicate submission of the same bar and decision returns the stored snapshot; a changed duplicate or older bar is rejected. A data gap cancels a pending entry and flattens an open position at the last known close, with a risk event. Manual pause blocks new entries but does not disable stop, target, session, or explicit FLAT exits. Reset requires a flat account and retains past generations, trades, and events.
 
+`status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. These fields can form the account context for the future ProDex prompt; the current adapter does not yet send them to n8n.
+
 ## Rules and boundaries
 
 The default model approximates the current **50K Trading Combine**: $50,000 start, $2,000 trailing maximum loss, $3,000 nominal target, 55% best-day consistency, 50 MES micros maximum, and a 3:10 PM Central flat cutoff. The maximum-loss floor trails end-of-day balance, locks at $50,000, and is also checked against adverse intrabar marks. Profit target/pass status is calculated at the next trading-day rollover or by `settle` after that day's 3:10 PM Central close; an account near target during the current day remains active until settlement. Fees default to $1.22 per MES round turn and fills assume one adverse tick of slippage. If a candle touches stop and target, the stop wins. These are research assumptions and can differ from actual fills.

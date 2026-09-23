@@ -58,6 +58,9 @@ def test_stop_fill_audit_and_reset(tmp_path):
     assert stopped["position"] is None
     assert stopped["trade_count"] == 1
     assert stopped["balance"] < 50000
+    assert stopped["win_rate"] == 0
+    assert stopped["consecutive_losses"] == 1
+    assert stopped["current_day_pnl"] < 0
     with ledger.connection() as conn:
         assert conn.execute("SELECT reason FROM sim_trade").fetchone()[0] == "stop"
         assert conn.execute("SELECT count(*) FROM sim_event WHERE event_type='entry_fill'").fetchone()[0] == 1

@@ -112,6 +112,9 @@ class SimBroker:
                             account.status = "active"
                     else:
                         event("risk", {"reason": "missing_intraday_bars"})
+                if account.balance <= account.mll and account.status != "failed":
+                    account.status = "failed"
+                    event("risk", {"reason": "maximum_loss_realized", "balance": account.balance})
                 pending = json.loads(row["pending_json"]) if contiguous and row["pending_json"] else None
                 if pending and account.status == "active":
                     signal = pending["signal"]
@@ -140,6 +143,9 @@ class SimBroker:
                                                  "source_bar_ts": pending["source_bar_ts"]})
                 if account.status in {"active", "paused_for_day"}:
                     _check_position(account, bar, rules, variant.minutes)
+                if account.balance <= account.mll and account.status != "failed":
+                    account.status = "failed"
+                    event("risk", {"reason": "maximum_loss_realized", "balance": account.balance})
                 for trade in account.trades:
                     conn.execute("INSERT INTO sim_trade(account,generation,entry_ts,exit_ts,direction,quantity,"
                                  "entry_price,exit_price,gross_pnl,net_pnl,reason) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -233,6 +239,11 @@ class SimBroker:
                                   trade["exit_price"], trade["gross_pnl"], trade["net_pnl"], trade["reason"]))
                     self.ledger._event(conn, account_name, row["generation"], row["last_bar_ts"],
                                        "trade_closed", trade)
+                if account.balance <= account.mll and account.status != "failed":
+                    account.status = "failed"
+                    self.ledger._event(conn, account_name, row["generation"], row["last_bar_ts"],
+                                       "risk", {"reason": "maximum_loss_realized",
+                                                "balance": account.balance})
                 _finalize_day(account, day, rules)
                 conn.execute("UPDATE sim_account SET balance=?,mll=?,day_start_balance=?,day_pnl_json=?,"
                              "status=?,pending_json=NULL,updated_at=CURRENT_TIMESTAMP WHERE name=?",

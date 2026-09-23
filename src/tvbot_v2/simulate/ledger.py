@@ -67,23 +67,40 @@ class SimLedger:
         rules = CombineRules(**json.loads(row["rules_json"]))
         day_pnl = json.loads(row["day_pnl_json"])
         best_day = max(day_pnl.values(), default=0.0)
+        eod_balance = rules.starting_balance
+        eod_peak = eod_balance
+        for day in sorted(day_pnl):
+            eod_balance += day_pnl[day]
+            eod_peak = max(eod_peak, eod_balance)
         position = conn.execute("SELECT * FROM sim_position WHERE account=?", (row["name"],)).fetchone()
         position_data = dict(position) if position else None
         equity = row["balance"]
         if position is not None and row["last_bar_close"] is not None:
             equity += ((row["last_bar_close"] - position["entry_price"])
                        * position["direction"] * 5.0 * position["quantity"])
-        trades = conn.execute("SELECT count(*) FROM sim_trade WHERE account=? AND generation=?",
-                              (row["name"], row["generation"])).fetchone()[0]
+        trade_pnls = [trade[0] for trade in conn.execute(
+            "SELECT net_pnl FROM sim_trade WHERE account=? AND generation=? ORDER BY id DESC",
+            (row["name"], row["generation"]))]
+        trades = len(trade_pnls)
+        losses = 0
+        for pnl in trade_pnls:
+            if pnl >= 0:
+                break
+            losses += 1
         return {"account": row["name"], "generation": row["generation"],
                 "strategy_id": variant.strategy_id, "timeframe": variant.timeframe,
                 "status": row["status"], "manual_paused": bool(row["manual_paused"]),
                 "balance": round(row["balance"], 2), "equity": round(equity, 2),
                 "mll": round(row["mll"], 2), "mll_remaining": round(equity - row["mll"], 2),
+                "eod_balance_peak": round(eod_peak, 2),
+                "drawdown_used": round(max(0, rules.maximum_loss - (equity - row["mll"])), 2),
                 "net_pnl": round(row["balance"] - rules.starting_balance, 2),
                 "effective_profit_target": round(max(rules.profit_target,
                                                       best_day / rules.consistency_fraction), 2),
                 "best_day": round(best_day, 2), "day_pnl": day_pnl,
+                "current_day_pnl": round(equity - row["day_start_balance"], 2),
+                "win_rate": round(sum(pnl > 0 for pnl in trade_pnls) / trades, 4) if trades else None,
+                "consecutive_losses": losses,
                 "position": position_data, "pending": json.loads(row["pending_json"]) if row["pending_json"] else None,
                 "next_check": row["next_check"], "last_bar_ts": row["last_bar_ts"],
                 "trade_count": trades}
