@@ -21,6 +21,8 @@ feed/exports/*
 runs/*
 logs/*
 reports/*
+data/*.sqlite
+data/*.sqlite-*
 *.log
 
 # OS/editor

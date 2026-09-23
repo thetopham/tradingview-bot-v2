@@ -1,4 +1,4 @@
-"""Offline five-account Topstep-style Trading Combine replay for MES bars.
+"""Offline Topstep-style Trading Combine replay for any number of MES accounts.
 
 This is a research approximation. OHLC bars do not reveal the intrabar path,
 so an ambiguous stop/target bar is charged as a stop. No broker code is used.
@@ -304,8 +304,8 @@ def simulate(
     signal_tape: SignalTape | None = None,
 ) -> dict[str, Any]:
     bars = validate_bars(bars)
-    if len(variants) != 5 or len({v.name for v in variants}) != 5:
-        raise ValueError("exactly five named account variants are required")
+    if not variants or len({v.name for v in variants}) != len(variants):
+        raise ValueError("account variants must have unique names")
     if not 1 < fast < slow or bar_minutes < 1:
         raise ValueError("invalid signal windows or bar interval")
     accounts = [Account(v, rules.starting_balance, rules.starting_balance - rules.maximum_loss,

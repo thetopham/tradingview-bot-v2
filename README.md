@@ -1,6 +1,6 @@
 # TradingView Bot v2
 
-Replay-first Python migration of the legacy TradingView ProjectX bot. The [September 2026 revival plan](documentation/revival-migration-plan-2026-09.md) records the current ProDex-first, five-account simulation scope.
+Replay-first Python migration of the legacy TradingView ProjectX bot. The [September 2026 revival plan](documentation/revival-migration-plan-2026-09.md) records the ProDex-first simulation scope. The persistent broker supports any number of independently configured demo accounts; alpha through epsilon are starter profiles.
 
 TradingView Bot v2 is the active home for the trading-research process learned from the Kalshi and Polymarket bots:
 
@@ -41,7 +41,17 @@ Do not commit service-role keys, database passwords, `.env`, or raw exports.
 2. Local Supabase inspector.
 3. Export `tv_datafeed_5m`, `tv_datafeed_15m`, `tv_datafeed_30m` into `feed/tradingview.sqlite3`.
 4. Replay baseline strategy with conservative bar-level fills.
-5. Brokerless simulation and reports.
+5. Persistent brokerless simulation and reports.
+
+## Persistent simulated broker
+
+The broker lives in `tvbot_v2.simulate` and uses a separate SQLite database. See the [runbook](documentation/simulated-broker-runbook.md) for the input contract, commands, and rule boundaries. It never connects to Topstep or ProjectX.
+
+```powershell
+python -m tvbot_v2.simulate --db data/sim_broker.sqlite init
+python -m tvbot_v2.simulate --db data/sim_broker.sqlite status
+python -m tvbot_v2.simulate --db data/sim_broker.sqlite step --input closed-bar-and-decision.json
+```
 
 ## Offline reconstruction available now
 

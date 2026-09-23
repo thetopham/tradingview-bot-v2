@@ -1,4 +1,4 @@
-"""Offline replay CLI. No order endpoint or broker import exists here."""
+"""Offline replay CLI. No order endpoint or live broker import exists here."""
 
 from __future__ import annotations
 
@@ -88,7 +88,7 @@ def _write_result(output_root: Path, result: dict, gate_name: str, source: str,
             lines.append(f"| {row['name']} | {row['status']} | ${row['net_pnl']:,.2f} | "
                          f"{row['trade_count']} | ${row['best_day']:,.2f} |")
         lines += ["", f"Combined net P&L: ${result['combined_net_pnl']:,.2f}", "",
-                  "Five independent $50K simulated accounts; the $250K total is a buying-power label, not cash capital.",
+                  "Each independent 50K account is a simulation; nominal buying-power labels are not cash capital.",
                   "Rules are today's Topstep 50K Combine proxy, not the cancelled beta account agreement.",
                   "OHLC bars cannot prove fill sequence; stops win ambiguous stop/target bars.",
                   "Historical Jev calls, if selected, are retrospective judgments, not decisions made at that historical time.",
@@ -115,9 +115,9 @@ class _BudgetGate:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Replay five offline simulated Topstep-style MES accounts")
+    parser = argparse.ArgumentParser(description="Replay offline simulated Topstep-style MES accounts")
     source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("--csv", help="MES 5-minute OHLC CSV with timezone-aware timestamps")
+    source.add_argument("--csv", help="MES OHLC CSV with timezone-aware bar-open timestamps")
     source.add_argument("--db", help="v2 canonical SQLite feed database")
     parser.add_argument("--timeframe", choices=("5m", "15m", "30m"), default="30m")
     parser.add_argument("--signals", help="recorded n8n/Prodex signal tape JSONL")
