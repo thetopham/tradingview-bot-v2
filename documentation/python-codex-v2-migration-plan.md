@@ -1,5 +1,7 @@
 # TradingView Bot v2 Migration Plan — Replay-First Python, No n8n / No Topstep
 
+> **September 2026 update:** The user now wants ProDex in the existing Pi n8n instance as the first forward-simulation decision source. See [the revival plan](revival-migration-plan-2026-09.md) for current scope; this May plan remains background architecture.
+
 > **For Hermes/Codex implementers:** Build v2 as a Kalshi/Polymarket-style research stack: **datafeed → canonical tape → replay → simulation → reports → only later paper/live gates**. Do not port n8n node-for-node. Do not keep Topstep/ProjectX/SignalR in the core.
 
 **Created:** 2026-05-21  

@@ -25,6 +25,19 @@ CREATE TABLE IF NOT EXISTS bar (
   FOREIGN KEY(raw_source_row_id) REFERENCES raw_source_row(id)
 );
 
+CREATE TABLE IF NOT EXISTS ambiguous_bar (
+  symbol TEXT NOT NULL,
+  timeframe TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  first_raw_source_row_id INTEGER NOT NULL,
+  conflicting_raw_source_row_id INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  detected_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY(symbol, timeframe, ts),
+  FOREIGN KEY(first_raw_source_row_id) REFERENCES raw_source_row(id),
+  FOREIGN KEY(conflicting_raw_source_row_id) REFERENCES raw_source_row(id)
+);
+
 CREATE TABLE IF NOT EXISTS feed_export_run (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
