@@ -53,4 +53,4 @@ python -m tvbot_v2.data_cli recover-signals --csv <ai_trading_log_rows.csv> --db
 python -m tvbot_v2.cli --db feed/tradingview.sqlite3 --timeframe 30m --signals runs/recovered-epsilon-30m.jsonl --output runs/epsilon-five-variant
 ```
 
-The five accounts are independently simulated 50K Trading Combine proxies. Old `size` values are retained as bracket-choice metadata. Exported 5-minute bars are needed before the practice workflow can be replayed faithfully.
+The five accounts are independently simulated 50K Trading Combine proxies. Old `size` values are retained as bracket-choice metadata. The 30-minute workflow's `5m derived snapshot` node actually reads `tv_datafeed_30m`; the practice workflow reads `tv_datafeed_5m`. Both exports are now available for separate historical replay. These runs do not reproduce the original model inputs or broker fills.

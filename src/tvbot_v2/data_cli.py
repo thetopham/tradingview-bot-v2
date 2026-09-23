@@ -7,6 +7,7 @@ import csv
 import json
 from pathlib import Path
 
+from tvbot_v2.feed.reconcile import reconcile_exports
 from tvbot_v2.feed.recover import recover_signal_rows
 from tvbot_v2.replay.topstep import load_sqlite
 from tvbot_v2.supabase_local.export import import_rows
@@ -26,11 +27,24 @@ def main(argv: list[str] | None = None) -> int:
     recovery.add_argument("--timeframe", choices=("5m", "15m", "30m"), required=True)
     recovery.add_argument("--prompt-version")
     recovery.add_argument("--output", required=True, help="JSONL signal tape path")
+    reconciliation = commands.add_parser("reconcile-results", help="join decision and trade result exports")
+    reconciliation.add_argument("--decisions", required=True)
+    reconciliation.add_argument("--results", required=True)
+    reconciliation.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     if args.command == "import-feed":
         with open(args.csv, newline="", encoding="utf-8-sig") as stream:
             metrics = import_rows(args.db, args.table, csv.DictReader(stream))
         print(json.dumps(metrics, sort_keys=True))
+        return 0
+    if args.command == "reconcile-results":
+        report = reconcile_exports(args.decisions, args.results)
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("x", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=2)
+            stream.write("\n")
+        print(json.dumps({key: value for key, value in report.items() if key != "groups"}, sort_keys=True))
         return 0
     bars = load_sqlite(args.db, timeframe=args.timeframe)
     rows, metrics = recover_signal_rows(

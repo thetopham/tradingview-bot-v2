@@ -14,7 +14,7 @@ from tvbot_v2.supabase_local.client import LocalSupabaseClient
 
 def import_rows(db_path: str | Path, source_table: str, rows: Iterable[dict[str, Any]]) -> dict[str, int]:
     init_db(db_path)
-    metrics = {"rows_seen": 0, "bars_upserted": 0, "malformed": 0}
+    metrics = {"rows_seen": 0, "bars_upserted": 0, "malformed": 0, "conflicts": 0}
     with connect_db(db_path) as conn:
         for row in rows:
             metrics["rows_seen"] += 1
@@ -31,6 +31,22 @@ def import_rows(db_path: str | Path, source_table: str, rows: Iterable[dict[str,
                 bar = normalize_bar(row, source_table)
             except (KeyError, TypeError, ValueError, OverflowError):
                 metrics["malformed"] += 1
+                continue
+            key = (bar["symbol"], bar["timeframe"], bar["ts"])
+            if conn.execute("SELECT 1 FROM ambiguous_bar WHERE symbol=? AND timeframe=? AND ts=?", key).fetchone():
+                metrics["conflicts"] += 1
+                continue
+            prior = conn.execute(
+                "SELECT open,high,low,close,volume,raw_source_row_id FROM bar "
+                "WHERE symbol=? AND timeframe=? AND ts=?", key).fetchone()
+            if prior is not None and tuple(prior[:5]) != tuple(bar[name] for name in
+                ("open", "high", "low", "close", "volume")):
+                conn.execute(
+                    "INSERT INTO ambiguous_bar(symbol,timeframe,ts,first_raw_source_row_id,"
+                    "conflicting_raw_source_row_id,reason) VALUES (?,?,?,?,?,?)",
+                    (*key, prior[5], raw_id, "conflicting OHLCV for one bar"))
+                conn.execute("DELETE FROM bar WHERE symbol=? AND timeframe=? AND ts=?", key)
+                metrics["conflicts"] += 1
                 continue
             conn.execute("""INSERT INTO bar(symbol,timeframe,ts,open,high,low,close,volume,
                                             indicators_json,source_table,raw_source_row_id)
@@ -60,7 +76,7 @@ def export_local_feed(db_path: str | Path, *, max_rows_per_table: int = 100_000,
                       if candidate.split(".")[0] in columns), None)
         if first and order is None:
             raise ValueError(f"{table} has no stable pagination column")
-        metrics = {"rows_seen": 0, "bars_upserted": 0, "malformed": 0}
+        metrics = {"rows_seen": 0, "bars_upserted": 0, "malformed": 0, "conflicts": 0}
         for offset in range(0, count if count is not None else max_rows_per_table, 1000):
             rows, _ = client.get_rows(table, offset=offset, limit=1000, order=order)
             if not rows:

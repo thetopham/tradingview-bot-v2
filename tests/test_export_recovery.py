@@ -32,6 +32,18 @@ def test_feed_import_is_idempotent_and_keeps_late_raw_row(tmp_path):
         assert conn.execute("SELECT count(*) FROM bar").fetchone()[0] == 1
 
 
+def test_conflicting_candles_are_excluded_even_after_reimport(tmp_path):
+    path = tmp_path / "feed.sqlite3"
+    first = source_row()
+    second = {**first, "id": "2", "c": "6909"}
+    assert import_rows(path, "tv_datafeed_30m", [first, second])["conflicts"] == 1
+    import_rows(path, "tv_datafeed_30m", [first, second])
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT count(*) FROM raw_source_row").fetchone()[0] == 2
+        assert conn.execute("SELECT count(*) FROM bar").fetchone()[0] == 0
+        assert conn.execute("SELECT count(*) FROM ambiguous_bar").fetchone()[0] == 1
+
+
 def test_signal_recovery_requires_matching_closed_bar_and_keeps_old_size_as_metadata(tmp_path):
     first = datetime(2026, 1, 4, 23, tzinfo=timezone.utc)
     bars = [Bar(first + timedelta(minutes=30 * i), 6900, 6901, 6899, 6900) for i in range(3)]
