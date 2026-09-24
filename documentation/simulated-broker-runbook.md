@@ -14,6 +14,8 @@ python -m tvbot_v2.simulate --db data/sim_broker.sqlite history epsilon --limit 
 
 `init` is safe to repeat. It adds missing profiles and rejects conflicting settings on an existing account. For additional accounts, pass `init --portfolio profiles.json`; that JSON is an array of profiles:
 
+`profiles/epsilon-30m-1m-execution.json` adds an independent `epsilon_1m` account. Its ProDex decision cadence remains 30 minutes; `execution_timeframe: "1m"` uses the one-minute feed for fills, brackets, and risk checks. The original `epsilon` account remains a 30-minute execution baseline. Run `init --portfolio profiles/epsilon-30m-1m-execution.json` before restarting the legacy bridge so the new account appears in its compatibility map.
+
 ```json
 [
   {
@@ -79,12 +81,14 @@ python -m tvbot_v2.simulate --db data/sim_broker.sqlite reset epsilon --reason "
 
 The BUY above queues an intent. The earliest fill is the next contiguous 30-minute bar open. Duplicate submission of the same bar and decision returns the stored snapshot; a changed duplicate or older bar is rejected. A data gap cancels a pending entry and flattens an open position at the last known close, with a risk event. Manual pause blocks new entries but does not disable stop, target, session, or explicit FLAT exits. Reset requires a flat account and retains past generations, trades, and events.
 
-`status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. These fields can form the account context for the future ProDex prompt; the current adapter does not yet send them to n8n.
+For profiles with a faster execution feed, submit the closed strategy decision separately with `SimBroker.submit_decision`. It records when the decision became available and queues it for the next execution bar **open after that time**. Advance the account on each closed one-minute candle with `process_bar` and no decision. A missing minute cancels pending entries and flattens any open position at the last known close. This avoids filling a 1-minute candle whose open preceded the ProDex response.
+
+`status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. The legacy bridge sends these fields as account context to a configured ProDex overseer.
 
 ## Rules and boundaries
 
 The default model approximates the current **50K Trading Combine**: $50,000 start, $2,000 trailing maximum loss, $3,000 nominal target, 55% best-day consistency, 50 MES micros maximum, and a 3:10 PM Central flat cutoff. The maximum-loss floor trails end-of-day balance, locks at $50,000, and is also checked against adverse intrabar marks. Profit target/pass status is calculated at the next trading-day rollover or by `settle` after that day's 3:10 PM Central close; an account near target during the current day remains active until settlement. Fees default to $1.22 per MES round turn and fills assume one adverse tick of slippage. If a candle touches stop and target, the stop wins. These are research assumptions and can differ from actual fills.
 
-The broker currently accepts a caller-provided closed bar and recorded decision. It does **not yet** pull the live Supabase feed, call ProDex, build the full derived snapshot/chart context, or run on the Pi. Those integration steps are separate so a decision cannot reach an order endpoint. Its SQLite ledger and append-only events are ready for that loop. XFA funded-account rules need a separate implementation; a passed Combine does not automatically create an XFA.
+The broker accepts caller-provided closed bars and recorded decisions. The separate legacy bridge on the Pi receives n8n's post-insert feed rows and calls the numeric ProDex overseer; the broker itself has no network order endpoint. The expired chart-image service is outside the numeric simulator. XFA funded-account rules need a separate implementation; a passed Combine does not automatically create an XFA.
 
 Rule references: [Trading Combine parameters](https://help.topstep.com/en/articles/8284197-trading-combine-parameters), [maximum loss](https://help.topstep.com/en/articles/8284204-what-is-the-maximum-loss-limit), [consistency](https://help.topstep.com/en/articles/8284208-consistency-at-topstep), [trading hours](https://help.topstep.com/en/articles/8284206-when-and-what-products-can-i-trade).
