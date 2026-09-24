@@ -85,6 +85,8 @@ For profiles with a faster execution feed, submit the closed strategy decision s
 
 For the original Flask scheduler/overseer path, use `profiles/broker-demo-1m.json` in a **new** broker database. It registers alpha through epsilon as independent demo accounts with their original decision cadences and one-minute execution. Additional accounts can be registered with another portfolio JSON; there is no fixed account count. `SimBroker.submit_order` accepts a BUY, SELL, or FLAT after the overseer returns, using the receipt time to select the next one-minute open. A caller-provided `client_order_id` makes retries idempotent. The one-minute feed alone advances fills, brackets, equity, and Combine risk. Existing ledgers remain untouched when a new database is used.
 
+`profiles/paired-vision-1m.json` registers `alpha_vision` through `epsilon_vision` as five independent accounts with the same decision cadences, one-minute execution, and brackets as the numeric accounts. The legacy bridge maps each new account to a separate image-plus-numeric ProDex n8n workflow. The original accounts have earlier positions and P&L, so compare decisions on matched candles and forward performance from a recorded start time rather than raw lifetime equity. No broker or ledger code changes are needed to add these profiles.
+
 `status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. The legacy bridge sends these fields as account context to a configured ProDex overseer.
 
 ## Rules and boundaries
