@@ -39,6 +39,17 @@ CREATE TABLE IF NOT EXISTS sim_bar (
   PRIMARY KEY(account, generation, bar_ts)
 );
 
+CREATE TABLE IF NOT EXISTS sim_decision (
+  account TEXT NOT NULL REFERENCES sim_account(name),
+  generation INTEGER NOT NULL,
+  bar_ts TEXT NOT NULL,
+  input_hash TEXT NOT NULL,
+  decision_json TEXT NOT NULL,
+  available_at TEXT NOT NULL,
+  snapshot_json TEXT NOT NULL,
+  PRIMARY KEY(account, generation, bar_ts)
+);
+
 CREATE TABLE IF NOT EXISTS sim_trade (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   account TEXT NOT NULL REFERENCES sim_account(name),

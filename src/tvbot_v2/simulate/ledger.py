@@ -89,6 +89,7 @@ class SimLedger:
             losses += 1
         return {"account": row["name"], "generation": row["generation"],
                 "strategy_id": variant.strategy_id, "timeframe": variant.timeframe,
+                "execution_timeframe": variant.execution_timeframe or variant.timeframe,
                 "status": row["status"], "manual_paused": bool(row["manual_paused"]),
                 "balance": round(row["balance"], 2), "equity": round(equity, 2),
                 "mll": round(row["mll"], 2), "mll_remaining": round(equity - row["mll"], 2),

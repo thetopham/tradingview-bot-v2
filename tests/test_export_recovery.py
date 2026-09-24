@@ -22,6 +22,15 @@ def test_receipt_time_is_normalized_only_when_close_is_unambiguous():
         normalize_bar(source_row("2026-01-04 23:40:02+00"), "tv_datafeed_30m")
 
 
+def test_one_minute_feed_receipt_is_a_closed_bar():
+    row = {**source_row("2026-09-23 23:59:05+00"), "timeframe": "1"}
+    assert normalize_bar(row, "tv_datafeed")["ts"] == "2026-09-23T23:58:00+00:00"
+    with pytest.raises(ValueError, match="too late"):
+        normalize_bar({**row, "ts": "2026-09-23 23:59:55+00"}, "tv_datafeed")
+    with pytest.raises(ValueError, match="1m"):
+        normalize_bar({**row, "timeframe": "5"}, "tv_datafeed")
+
+
 def test_feed_import_is_idempotent_and_keeps_late_raw_row(tmp_path):
     path = tmp_path / "feed.sqlite3"
     rows = [source_row(), source_row("2026-01-04 23:40:02+00")]
