@@ -294,6 +294,7 @@ class SimBroker:
                 if pending and pending.get("earliest_fill_ts") and bar.ts < utc(pending["earliest_fill_ts"]):
                     pending = None
                 order_filled = False
+                order_fill_price = None
                 if pending and account.status == "active":
                     signal = pending["signal"]
                     direction = 1 if signal == "BUY" else -1 if signal == "SELL" else 0
@@ -302,6 +303,7 @@ class SimBroker:
                         _exit(account, bar, price, "signal_flat" if signal == "FLAT" else "signal_reverse", rules)
                         event("exit_fill", {"signal": signal, "price": price})
                         order_filled = True
+                        order_fill_price = price
                     if (direction and account.position is None and not row["manual_paused"]
                             and entry_allowed(bar.ts, variant.execution_minutes)):
                         bracket = variant.bracket(pending["size"])
@@ -323,13 +325,14 @@ class SimBroker:
                                                  "order_id": (f"SIM-{pending['order_id']}"
                                                               if pending.get("order_id") else None)})
                             order_filled = True
+                            order_fill_price = price
                 if pending and pending.get("order_id"):
                     conn.execute("UPDATE sim_order SET status=? WHERE id=? AND status='queued'",
                                  ("filled" if order_filled else "cancelled", pending["order_id"]))
                     event("order_filled" if order_filled else "order_cancelled",
                           {"order_id": f"SIM-{pending['order_id']}",
                            "signal": pending["signal"],
-                           "price": bar.open if order_filled else None})
+                           "price": order_fill_price})
                 if account.status in {"active", "paused_for_day"}:
                     _check_position(account, bar, rules, variant.execution_minutes)
                 if account.balance <= account.mll and account.status != "failed":
