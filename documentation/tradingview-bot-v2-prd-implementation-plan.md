@@ -1,5 +1,7 @@
 # TradingView Bot v2 PRD + Migration Implementation Plan
 
+> **Historical May PRD.** The current Pi simulator includes n8n ProDex workflows and a Flask bridge while the v2 broker remains simulation-only. Use the [user guide](user-guide.md) and [broker runbook](simulated-broker-runbook.md) for current behavior. Planned tasks and runtime assumptions below are preserved as design history.
+
 > **September 2026 update:** The user now wants ProDex in the existing Pi n8n instance as the first forward-simulation decision source. See [the revival plan](revival-migration-plan-2026-09.md) for current scope; this May PRD remains background architecture.
 
 > **For Hermes/Codex implementers:** This is the build spec for upgrading the existing TradingView bot into v2. Treat Kalshi and Polymarket as reference archives/process libraries. Build the learned process — canonical feeds, replay, simulation, metrics, reports, watchdogs — into TradingView Bot v2 over local TradingView/Supabase data. Do not keep expanding three parallel bots.

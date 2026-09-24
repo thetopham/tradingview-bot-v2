@@ -1,7 +1,9 @@
 # TradingView Bot v2 revival and migration plan
 
+> **Historical recovery snapshot.** This plan records the September 23 reconstruction and its then-pending tasks. The Pi now runs a Flask bridge, ten one-minute-execution demo accounts, ProDex numeric and chart-image workflows, an authenticated dashboard, and a read-only strategy farm. For current operation, use the [user guide](user-guide.md), [broker runbook](simulated-broker-runbook.md), and [strategy farm](strategy-farm.md). Treat dates, account counts, workflow statuses, and "still to build" statements below as historical.
+
 **Updated:** 2026-09-23
-**Status:** Offline reconstructions and local persistent simulated broker working; live feed and ProDex loop still to build.
+**Status at this snapshot:** Offline reconstructions and local persistent simulated broker working; live feed and ProDex loop were still to build. See the current guide above for their later implementation.
 
 This plan supersedes the earlier no-n8n runtime assumption in the May 2026 migration documents. The user now wants to try the ProDex model in self-hosted n8n first, while v2 owns the feed, any number of independent simulated account ledgers, rule checks, and evaluation. Alpha through epsilon are starter profiles, not an account limit. TypeSafe Jev is a later classifier sidegrade and split test. There are no current Topstep accounts to connect. Do not start the legacy ProjectX order path.
 

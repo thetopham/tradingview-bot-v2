@@ -1,5 +1,7 @@
 # MES strategy farm: first offline screen
 
+For the dashboard, account comparison, and live simulator flow, start with the [user guide](user-guide.md). This page documents the separate research screen.
+
 The first farm stage is a read-only, reproducible directional event study. It does not create demo accounts or place orders. It reuses v2's normalized MES bars, emits closed-bar signals from pure indicator rules, and measures the direction of the move from the **next bar open** to fixed 15, 30, and 60-minute horizons on 5m input. It is a screen for candidates to test with the simulated broker's 1m fill feed, not a profitability claim.
 
 Run it with a Supabase CSV export or the canonical v2 SQLite feed:

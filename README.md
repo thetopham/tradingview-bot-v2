@@ -1,66 +1,46 @@
 # TradingView Bot v2
 
-Replay-first Python migration of the legacy TradingView ProjectX bot. The [September 2026 revival plan](documentation/revival-migration-plan-2026-09.md) records the ProDex-first simulation scope. The persistent broker supports any number of independently configured demo accounts; alpha through epsilon are starter profiles.
+TradingView Bot v2 supplies the **simulated MES broker and research tools** for the [TradingView bot Flask bridge](https://github.com/thetopham/tradingview-bot). The Pi runs demo accounts only. It does not connect to Topstep/ProjectX or send real orders.
 
-TradingView Bot v2 is the active home for the trading-research process learned from the Kalshi and Polymarket bots:
+**Start here:** [User guide](documentation/user-guide.md) · [Broker runbook](documentation/simulated-broker-runbook.md) · [Strategy farm](documentation/strategy-farm.md) · [Revival history](documentation/revival-migration-plan-2026-09.md)
 
-```text
-local TradingView/Supabase feed
-  -> canonical append-only tape
-  -> replay engine
-  -> brokerless simulation
-  -> immutable run artifacts
-  -> reports + Hermes cron watchdogs
-```
-
-## Safety boundary
-
-MVP is research/simulation only:
-
-- no Topstep/ProjectX execution
-- no SignalR
-- no requirement for n8n to run offline replay; a decision-only ProDex adapter is planned for forward simulation
-- no live or paper broker order paths
-- no secrets committed or printed
-
-Kalshi and Polymarket are reference archives/process libraries, not parallel active bots to keep expanding.
-
-## Local data source
-
-The local self-hosted Supabase API base is configured by env/config. The known local API base is:
+## Running system
 
 ```text
-http://192.168.0.35:8000
+TradingView closed 1m MES candles -> n8n datafeed -> Flask /sim/feed
+                                               -> v2 SQLite broker -> fills, brackets, risk
+
+TradingView closed 5m / 15m / 30m candles -> n8n datafeed -> Flask cache
+                                            -> decision timer -> ProDex overseer
+                                            -> v2 pending order -> next eligible 1m open
+
+v2 closed trade -> durable result outbox -> Supabase trade_results
+ProDex decision -> Supabase ai_trading_log -> ai_trade_feed
+v2 ledger -> authenticated /sim/dashboard
 ```
 
-Do not commit service-role keys, database passwords, `.env`, or raw exports.
+The one-minute feed advances every configured account's fills, stops, targets, marked equity, and loss rules. It **does not call an LLM every minute**. The decision workflows run on their own closed strategy candles. A decision that arrives after a candle opened cannot fill at that earlier open. When stop and target fall inside one candle, the simulator assumes the stop happened first. One-minute OHLC cannot establish the true intraminute order.
 
-## First milestones
+As checked on 2026-09-24, the Pi has five numeric ProDex accounts (`alpha` through `epsilon`) and five paired chart-image accounts (`*_vision`), all using one-minute execution. This is a starting set, not a software account limit. The image experiment is described in the [bridge repo](https://github.com/thetopham/tradingview-bot/blob/main/docs/paired-chart-vision-experiment.md). Account balance and split-test results are experimental simulations, not verified broker P&L.
 
-1. Safe config and redaction.
-2. Local Supabase inspector.
-3. Export `tv_datafeed_5m`, `tv_datafeed_15m`, `tv_datafeed_30m` into `feed/tradingview.sqlite3`.
-4. Replay baseline strategy with conservative bar-level fills.
-5. Persistent brokerless simulation and reports.
+## Local broker
 
-## Persistent simulated broker
+Install the package with `pip install -e .`, then use a **separate** local database for experiments:
 
-The broker lives in `tvbot_v2.simulate` and uses a separate SQLite database. See the [runbook](documentation/simulated-broker-runbook.md) for the input contract, commands, and rule boundaries. It never connects to Topstep or ProjectX.
-
-```powershell
-python -m tvbot_v2.simulate --db data/sim_broker.sqlite init
-python -m tvbot_v2.simulate --db data/sim_broker.sqlite status
-python -m tvbot_v2.simulate --db data/sim_broker.sqlite step --input closed-bar-and-decision.json
+```bash
+python -m tvbot_v2.simulate --db data/my-experiment.sqlite init --portfolio profiles/broker-demo-1m.json
+python -m tvbot_v2.simulate --db data/my-experiment.sqlite status
+python -m tvbot_v2.simulate --db data/my-experiment.sqlite history epsilon --limit 20
 ```
 
-## Offline reconstruction available now
+The Pi production ledger is `/home/thetopham/tradingview-bot-v2/data/sim_broker_local.sqlite`. Do not use that path for tests, resets, or replay. Profile changes to an existing account are rejected; create a new named variant. See the [runbook](documentation/simulated-broker-runbook.md) for the decision contract, bracket settings, conservative fill rules, and account management.
 
-The supplied 30-minute MES CSV and epsilon decision log can be imported and replayed without a broker connection:
+## Research
 
-```powershell
-python -m tvbot_v2.data_cli import-feed --csv <tv_datafeed_30m_rows.csv> --table tv_datafeed_30m --db feed/tradingview.sqlite3
-python -m tvbot_v2.data_cli recover-signals --csv <ai_trading_log_rows.csv> --db feed/tradingview.sqlite3 --account epsilon --timeframe 30m --prompt-version simple-30m-epsilon-1-13-2026-optimize --output runs/recovered-epsilon-30m.jsonl
-python -m tvbot_v2.cli --db feed/tradingview.sqlite3 --timeframe 30m --signals runs/recovered-epsilon-30m.jsonl --output runs/epsilon-five-variant
-```
+The [strategy farm](documentation/strategy-farm.md) screens versioned indicator rules against historical and newly cached five-minute bars. Its weekday Pi timer writes immutable reports under `runs/strategy-farm`. It does not create accounts or orders. A candidate needs a separate one-minute broker replay and fresh forward demo account before being treated as promising. [Issue #5](https://github.com/thetopham/tradingview-bot-v2/issues/5) tracks this next gate.
 
-The five accounts are independently simulated 50K Trading Combine proxies. Old `size` values are retained as bracket-choice metadata. The 30-minute workflow's `5m derived snapshot` node actually reads `tv_datafeed_30m`; the practice workflow reads `tv_datafeed_5m`. Both exports are now available for separate historical replay. These runs do not reproduce the original model inputs or broker fills.
+The original May migration plans are kept as historical design notes: [Python migration](documentation/python-codex-v2-migration-plan.md) and [PRD](documentation/tradingview-bot-v2-prd-implementation-plan.md). Their planned architecture is not a description of the current Pi runtime.
+
+## Data and secrets
+
+Local Supabase supplies decision and market-history data. The broker's SQLite ledger is authoritative for simulated positions and fills. Do not commit service keys, Chart-Img sessions, OAuth credentials, dashboard passwords, private environment files, or raw data exports.
