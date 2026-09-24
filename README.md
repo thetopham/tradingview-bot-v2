@@ -39,7 +39,7 @@ The Pi production ledger is `/home/thetopham/tradingview-bot-v2/data/sim_broker_
 
 The [strategy farm](documentation/strategy-farm.md) screens versioned indicator rules against historical and newly cached five-minute bars. Its weekday Pi timer writes immutable reports under `runs/strategy-farm`. It does not create accounts or orders. A candidate needs a separate one-minute broker replay and fresh forward demo account before being treated as promising. [Issue #5](https://github.com/thetopham/tradingview-bot-v2/issues/5) tracks this next gate.
 
-The original May migration plans are kept as historical design notes: [Python migration](documentation/python-codex-v2-migration-plan.md) and [PRD](documentation/tradingview-bot-v2-prd-implementation-plan.md). Their planned architecture is not a description of the current Pi runtime.
+The [pre-simulator ProjectX/SignalR release](https://github.com/thetopham/tradingview-bot/releases/tag/legacy-projectx-signalr-final) preserves the original repo's last main-branch source revision before the bridge was added. The original May migration plans are kept as historical design notes: [Python migration](documentation/python-codex-v2-migration-plan.md) and [PRD](documentation/tradingview-bot-v2-prd-implementation-plan.md). Their planned architecture is not a description of the current Pi runtime.
 
 ## Data and secrets
 
