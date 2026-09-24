@@ -83,6 +83,8 @@ The BUY above queues an intent. The earliest fill is the next contiguous 30-minu
 
 For profiles with a faster execution feed, submit the closed strategy decision separately with `SimBroker.submit_decision`. It records when the decision became available and queues it for the next execution bar **open after that time**. Advance the account on each closed one-minute candle with `process_bar` and no decision. A missing minute cancels pending entries and flattens any open position at the last known close. This avoids filling a 1-minute candle whose open preceded the ProDex response.
 
+For the original Flask scheduler/overseer path, use `profiles/broker-demo-1m.json` in a **new** broker database. It registers alpha through epsilon as independent demo accounts with their original decision cadences and one-minute execution. Additional accounts can be registered with another portfolio JSON; there is no fixed account count. `SimBroker.submit_order` accepts a BUY, SELL, or FLAT after the overseer returns, using the receipt time to select the next one-minute open. A caller-provided `client_order_id` makes retries idempotent. The one-minute feed alone advances fills, brackets, equity, and Combine risk. Existing ledgers remain untouched when a new database is used.
+
 `status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. The legacy bridge sends these fields as account context to a configured ProDex overseer.
 
 ## Rules and boundaries
