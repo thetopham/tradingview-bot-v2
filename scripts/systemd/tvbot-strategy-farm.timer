@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily MES strategy farm report
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:00:00 America/Denver
+RandomizedDelaySec=2m
+Persistent=false
+Unit=tvbot-strategy-farm.service
+
+[Install]
+WantedBy=timers.target

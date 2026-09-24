@@ -2,8 +2,12 @@
 
 from datetime import datetime, timedelta, timezone
 import csv
+import json
+import sqlite3
 
-from tvbot_v2.replay.strategy_farm import evaluate_events, load_export_csv
+import pytest
+
+from tvbot_v2.replay.strategy_farm import evaluate_events, load_export_csv, merge_decision_feed
 from tvbot_v2.replay.topstep import Bar
 from tvbot_v2.strategy.indicator_farm import Candidate, generate_candidates
 
@@ -62,3 +66,28 @@ def test_conflicting_receipt_rows_are_excluded(tmp_path):
     assert quality["rows_seen"] == 152
     assert quality["conflicting_timestamps"] == 1
     assert len(bars) == 150
+
+
+def test_broker_decision_feed_merges_matching_bars_and_rejects_conflicts(tmp_path):
+    bars = _bars(151)
+    path = tmp_path / "broker.sqlite"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE sim_decision_feed(timeframe TEXT,bar_ts TEXT,bar_json TEXT)")
+        for bar in (bars[-1], _bars(152)[-1]):
+            conn.execute("INSERT INTO sim_decision_feed VALUES (?,?,?)",
+                         ("5m", bar.ts.isoformat(), json.dumps({
+                             "timestamp": bar.ts.isoformat(), "open": bar.open,
+                             "high": bar.high, "low": bar.low, "close": bar.close,
+                             "volume": bar.volume})))
+    merged, quality = merge_decision_feed(bars, path, "5m")
+    assert len(merged) == 152
+    assert quality["identical_overlap"] == 1
+    assert quality["new_bars"] == 1
+    with sqlite3.connect(path) as conn:
+        conn.execute("UPDATE sim_decision_feed SET bar_json=? WHERE bar_ts=?",
+                     (json.dumps({"timestamp": bars[-1].ts.isoformat(), "open": bars[-1].open,
+                                  "high": bars[-1].high, "low": bars[-1].low,
+                                  "close": bars[-1].close + 0.25, "volume": bars[-1].volume}),
+                      bars[-1].ts.isoformat()))
+    with pytest.raises(ValueError, match="conflicting broker decision feed bar"):
+        merge_decision_feed(bars, path, "5m")

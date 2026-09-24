@@ -9,7 +9,19 @@ python -m tvbot_v2.replay.strategy_farm --csv /private/path/tv_datafeed_5m_rows.
 python -m tvbot_v2.replay.strategy_farm --db feed/tradingview.sqlite3 --timeframe 5m --output runs/strategy-farm
 ```
 
-Each run creates a new, never-overwritten directory with `config.json` (including source SHA-256), `quality.json`, `summary.json`, `outcomes.jsonl`, and `report.md`. The Supabase export's `ts` is a receipt time; v2 infers the preceding bar only when receipt is within two minutes of its close. Conflicting OHLCV for the same bar is excluded. Labels crossing a missing 5m bar or a chronological 70/15/15 split boundary are excluded. A regime is the latest observed **as of the feed timestamp**, with freshness shown in the report; it is not inferred from wall-clock time alone.
+Each run creates a new, never-overwritten directory with `config.json` (including source and canonical bar-tape SHA-256), `quality.json`, `summary.json`, compressed `bars.jsonl.gz` and `outcomes.jsonl.gz`, and `report.md`. The Supabase export's `ts` is a receipt time; v2 infers the preceding bar only when receipt is within two minutes of its close. Conflicting OHLCV for the same bar is excluded. Labels crossing a missing 5m bar or a chronological 70/15/15 split boundary are excluded. A regime is the latest observed **as of the feed timestamp**, with freshness shown in the report; it is not inferred from wall-clock time alone.
+
+On the Pi, the legacy bridge already writes each closed 5m candle into the simulated broker's `sim_decision_feed` table. Its 59 overlapping candles with the 2026-09-24 07:13 UTC Supabase snapshot matched exactly. The farm can merge that local cache with the immutable historical CSV, rejecting any overlap whose OHLCV differs:
+
+```bash
+python -m tvbot_v2.replay.strategy_farm \
+  --csv data/strategy_farm/mes-5m-20260924T071359Z.csv \
+  --decision-feed-db data/sim_broker_local.sqlite \
+  --timeframe 5m --output runs/strategy-farm \
+  --max-bars 150000 --max-feed-age-minutes 20
+```
+
+`scripts/systemd/tvbot-strategy-farm.{service,timer}` runs this read-only study once each weekday near 09:00 America/Denver. The service is limited to half a CPU, 768 MB, and two minutes; it can write only its report directory. A stale feed fails before an artifact is written. The static base snapshot preserves January through September history; the broker cache appends new closed 5m bars. The cache must remain durable and gap checks still apply. The timer does not create demo accounts or send orders.
 
 ## Version 1 rule definitions
 
@@ -32,4 +44,4 @@ Market Cipher B is an [invite-only TradingView script](https://marketciphertradi
 
 `positive_rate` is the fraction of directional point moves greater than zero at a fixed horizon. `wilson_lower_95` is a descriptive interval lower bound. Outcomes exclude fees, slippage, stops, targets, position overlap, and Topstep rules. Many variants are screened, and overlapping events are correlated; the intervals do not correct for multiple comparisons. The validation screen is ordered by its lower bound only where there are at least 30 events. Test-window and current-regime rows remain visible in `summary.json`; do not tune rules to the test window.
 
-Issue [#5](https://github.com/thetopham/tradingview-bot-v2/issues/5) tracks the next gate: reconcile a refreshed feed, test fixed candidate definitions through 1m simulated broker fills and fees, then run selected candidates in fresh forward demo accounts. Existing ProDex accounts remain intact. A daily read-only refresh needs an authenticated feed path and an explicit host schedule; this initial run is manual.
+Issue [#5](https://github.com/thetopham/tradingview-bot-v2/issues/5) tracks the next gate: test fixed candidate definitions through 1m simulated broker fills and fees, then run selected candidates in fresh forward demo accounts. Existing ProDex accounts remain intact. The daily report is a research refresh, not an automatic strategy promotion.

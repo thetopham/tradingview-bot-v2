@@ -5,9 +5,11 @@ from __future__ import annotations
 import argparse
 import csv
 from datetime import datetime, timedelta, timezone
+import gzip
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 from statistics import median
 from uuid import uuid4
 
@@ -52,9 +54,54 @@ def load_export_csv(path: str | Path, timeframe: str) -> tuple[list[Bar], dict[s
             for row in by_time.values() if row is not None]
     bars.sort(key=lambda bar: bar.ts)
     quality["bars"] = len(bars)
+    gaps = [(right.ts - left.ts).total_seconds() / 60 for left, right in zip(bars, bars[1:])]
+    quality["nonconsecutive_intervals"] = sum(delta != int(timeframe[:-1]) for delta in gaps)
+    quality["largest_gap_minutes"] = int(max(gaps, default=0))
     if len(bars) < 150:
         raise ValueError("fewer than 150 unambiguous bars")
     return bars, quality
+
+
+def merge_decision_feed(bars: list[Bar], db_path: str | Path,
+                        timeframe: str) -> tuple[list[Bar], dict[str, int | str]]:
+    """Add the Pi bridge's durable, closed decision candles without rewriting history."""
+    uri = Path(db_path).resolve().as_uri() + "?mode=ro"
+    with sqlite3.connect(uri, uri=True) as conn:
+        rows = conn.execute(
+            "SELECT bar_ts,bar_json FROM sim_decision_feed WHERE timeframe=? ORDER BY bar_ts",
+            (timeframe,),
+        ).fetchall()
+    merged = {bar.ts.isoformat(): bar for bar in bars}
+    metrics: dict[str, int | str] = {"rows_seen": 0, "identical_overlap": 0,
+                                      "new_bars": 0, "latest_feed_bar": ""}
+    interval = timedelta(minutes=int(timeframe[:-1]))
+    for timestamp, payload in rows:
+        raw = json.loads(payload)
+        ts = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        if ts.tzinfo is None or ts.minute % int(timeframe[:-1]) or ts.second or ts.microsecond:
+            raise ValueError("decision feed contains unaligned timestamp")
+        if datetime.fromisoformat(str(raw["timestamp"]).replace("Z", "+00:00")) != ts:
+            raise ValueError("decision feed timestamp mismatch")
+        if ts + interval > datetime.now(timezone.utc):
+            raise ValueError("decision feed contains an unclosed bar")
+        bar = Bar(ts, *[float(raw[field]) for field in ("open", "high", "low", "close")],
+                  float(raw.get("volume") or 0))
+        if bar.volume < 0:
+            raise ValueError("decision feed contains negative volume")
+        metrics["rows_seen"] += 1
+        metrics["latest_feed_bar"] = ts.isoformat()
+        key = ts.isoformat()
+        prior = merged.get(key)
+        if prior is None:
+            merged[key] = bar
+            metrics["new_bars"] += 1
+        elif (prior.open, prior.high, prior.low, prior.close, prior.volume) == (
+                bar.open, bar.high, bar.low, bar.close, bar.volume):
+            metrics["identical_overlap"] += 1
+        else:
+            raise ValueError(f"conflicting broker decision feed bar at {key}")
+    result = sorted(merged.values(), key=lambda bar: bar.ts)
+    return result, metrics
 
 
 def _split_bounds(total: int) -> dict[str, tuple[int, int]]:
@@ -185,8 +232,9 @@ def build_study(bars: list[Bar], bar_minutes: int) -> tuple[dict, list[dict]]:
             outcomes)
 
 
-def write_run(output_root: str | Path, source: str | Path, quality: dict,
-              summary: dict, outcomes: list[dict]) -> Path:
+def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], quality: dict,
+              summary: dict, outcomes: list[dict],
+              decision_feed_db: str | Path | None = None) -> Path:
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
@@ -195,13 +243,24 @@ def write_run(output_root: str | Path, source: str | Path, quality: dict,
     stage.mkdir()
     try:
         digest = hashlib.sha256(Path(source).read_bytes()).hexdigest()
+        tape_digest = hashlib.sha256()
+        with gzip.open(stage / "bars.jsonl.gz", "wb", compresslevel=6) as stream:
+            for bar in bars:
+                line = (json.dumps({"timestamp": bar.ts.isoformat(), "open": bar.open,
+                                    "high": bar.high, "low": bar.low, "close": bar.close,
+                                    "volume": bar.volume}, separators=(",", ":")) + "\n").encode()
+                tape_digest.update(line)
+                stream.write(line)
         (stage / "config.json").write_text(json.dumps({
             "source": str(Path(source).resolve()), "source_sha256": digest,
+            "bar_tape_sha256": tape_digest.hexdigest(),
+            "decision_feed_db": str(Path(decision_feed_db).resolve()) if decision_feed_db else None,
+            "latest_decision_feed_bar": quality.get("decision_feed", {}).get("latest_feed_bar"),
             "signal_definition": "indicator_farm_v1", "horizons_bars": HORIZONS,
             "min_sample": MIN_SAMPLE, "simulation_only": True}, indent=2) + "\n")
         (stage / "quality.json").write_text(json.dumps(quality, indent=2) + "\n")
         (stage / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-        with (stage / "outcomes.jsonl").open("w", encoding="utf-8") as stream:
+        with gzip.open(stage / "outcomes.jsonl.gz", "wt", encoding="utf-8", compresslevel=6) as stream:
             for row in outcomes:
                 stream.write(json.dumps(row, separators=(",", ":")) + "\n")
         lines = ["# MES indicator farm: directional event study", "",
@@ -212,6 +271,12 @@ def write_run(output_root: str | Path, source: str | Path, quality: dict,
                  f"Feed age at run: {summary['current_regime']['feed_age_minutes_at_run']} minutes "
                  f"({'fresh' if summary['current_regime']['feed_fresh_at_run'] else 'stale'})",
                  f"Candidate events: {summary['candidate_count']:,}", "",
+                 f"Source quality: {quality.get('malformed_or_late', 0)} late/malformed, "
+                 f"{quality.get('conflicting_timestamps', 0)} conflicting timestamps, "
+                 f"{quality.get('nonconsecutive_intervals', 0)} nonconsecutive intervals.",
+                 f"Local decision feed: {quality.get('decision_feed', {}).get('new_bars', 0)} new bars, "
+                 f"{quality.get('decision_feed', {}).get('identical_overlap', 0)} matching overlap bars.",
+                 f"Excluded outcome labels: {summary['evaluation']['skipped']}", "",
                  "## Validation screen: next-open to 30-minute close", "",
                  "| Candidate rule | Events | Positive directional move | Wilson lower 95% |",
                  "|---|---:|---:|---:|"]
@@ -242,16 +307,33 @@ def main(argv: list[str] | None = None) -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--csv", help="Supabase tv_datafeed_<timeframe> CSV export")
     source.add_argument("--db", help="canonical v2 bar SQLite database")
+    parser.add_argument("--decision-feed-db", help="read-only Pi broker cache of closed decision bars")
     parser.add_argument("--timeframe", choices=("5m", "15m", "30m"), default="5m")
     parser.add_argument("--output", default="runs/strategy-farm")
+    parser.add_argument("--max-bars", type=int, default=150_000)
+    parser.add_argument("--max-feed-age-minutes", type=int,
+                        help="fail before writing if the newest completed bar is older")
     args = parser.parse_args(argv)
+    if args.max_bars < 150 or (args.max_feed_age_minutes is not None and
+                               args.max_feed_age_minutes < 0):
+        parser.error("invalid resource/freshness limit")
     if args.csv:
         bars, quality = load_export_csv(args.csv, args.timeframe)
     else:
         bars = load_sqlite(args.db, timeframe=args.timeframe)
         quality = {"bars": len(bars), "source": "canonical_sqlite"}
+    if args.decision_feed_db:
+        bars, feed_quality = merge_decision_feed(bars, args.decision_feed_db, args.timeframe)
+        quality["decision_feed"] = feed_quality
+        quality["bars_after_merge"] = len(bars)
+    if len(bars) > args.max_bars:
+        parser.error(f"{len(bars)} bars exceed --max-bars={args.max_bars}")
     summary, outcomes = build_study(bars, int(args.timeframe[:-1]))
-    run = write_run(args.output, args.csv or args.db, quality, summary, outcomes)
+    if (args.max_feed_age_minutes is not None and
+            summary["current_regime"]["feed_age_minutes_at_run"] > args.max_feed_age_minutes):
+        parser.error("newest completed bar is stale; no run written")
+    run = write_run(args.output, args.csv or args.db, bars, quality, summary, outcomes,
+                    args.decision_feed_db)
     print(json.dumps({"run": str(run), "bars": len(bars),
                       "candidates": summary["candidate_count"],
                       "outcomes": summary["outcome_count"],
