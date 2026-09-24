@@ -297,7 +297,7 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
                  f"Local decision feed: {quality.get('decision_feed', {}).get('new_bars', 0)} new bars, "
                  f"{quality.get('decision_feed', {}).get('identical_overlap', 0)} matching overlap bars.",
                  f"Excluded outcome labels: {summary['evaluation']['skipped']}", "",
-                 "## Validation screen: next-open to 30-minute close", "",
+                 f"## Validation screen: next-open to {6 * summary['bar_minutes']}-minute close", "",
                  "| Candidate rule | Events | Positive directional move | Wilson lower 95% |",
                  "|---|---:|---:|---:|"]
         for row in summary["validation_screen_30m"]:
@@ -311,7 +311,8 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
                         row["horizon_bars"] == 6 and row["regime"] == current_key]
         current_rows.sort(key=lambda row: (-row["events"], row["strategy"]))
         lines += ["", f"## Latest observed regime: {current_key}", "",
-                  "Test-window 30-minute directional outcomes for historical bars with the same regime:",
+                  f"Test-window {6 * summary['bar_minutes']}-minute directional outcomes "
+                  "for historical bars with the same regime:",
                   "", "| Candidate rule | Events | Positive move | Wilson lower 95% | Sample |",
                   "|---|---:|---:|---:|---|"]
         for row in current_rows:
