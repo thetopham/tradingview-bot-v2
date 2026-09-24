@@ -1,0 +1,7 @@
+[
+  {"name":"alpha","timeframe":"5m","execution_timeframe":"1m","strategy_id":"alpha_demo","brackets":{"1":{"contracts":1,"stop_ticks":24,"target_ticks":48},"2":{"contracts":2,"stop_ticks":12,"target_ticks":24},"3":{"contracts":3,"stop_ticks":8,"target_ticks":16}}},
+  {"name":"beta","timeframe":"5m","execution_timeframe":"1m","strategy_id":"beta_demo","brackets":{"1":{"contracts":1,"stop_ticks":24,"target_ticks":48},"2":{"contracts":2,"stop_ticks":12,"target_ticks":24},"3":{"contracts":3,"stop_ticks":8,"target_ticks":16}}},
+  {"name":"gamma","timeframe":"5m","execution_timeframe":"1m","strategy_id":"gamma_demo","brackets":{"1":{"contracts":1,"stop_ticks":24,"target_ticks":48},"2":{"contracts":2,"stop_ticks":12,"target_ticks":24},"3":{"contracts":3,"stop_ticks":8,"target_ticks":16}}},
+  {"name":"delta","timeframe":"15m","execution_timeframe":"1m","strategy_id":"delta_demo","brackets":{"1":{"contracts":1,"stop_ticks":24,"target_ticks":48},"2":{"contracts":2,"stop_ticks":12,"target_ticks":24},"3":{"contracts":3,"stop_ticks":8,"target_ticks":16}}},
+  {"name":"epsilon","timeframe":"30m","execution_timeframe":"1m","strategy_id":"epsilon_demo","brackets":{"1":{"contracts":1,"stop_ticks":24,"target_ticks":48},"2":{"contracts":2,"stop_ticks":12,"target_ticks":24},"3":{"contracts":3,"stop_ticks":8,"target_ticks":16}}}
+]

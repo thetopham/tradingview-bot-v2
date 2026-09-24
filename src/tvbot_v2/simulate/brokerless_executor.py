@@ -124,6 +124,102 @@ class SimBroker:
                               digest, _json(normalized), now.isoformat(), _json(snapshot)))
                 return snapshot
 
+    def submit_order(self, account_name: str, signal: str, size: int,
+                     client_order_id: str, *, available_at: datetime | None = None,
+                     metadata: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Accept a broker order after a strategy finishes, independent of its candle size."""
+        now = available_at or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("order availability requires a timezone offset")
+        now = now.astimezone(timezone.utc)
+        signal = str(signal).upper()
+        if signal not in {"BUY", "SELL", "FLAT"} or type(size) is not int or size not in (1, 2, 3):
+            raise ValueError("order needs BUY/SELL/FLAT and size 1, 2, or 3")
+        if not isinstance(client_order_id, str) or not 1 <= len(client_order_id) <= 160:
+            raise ValueError("client_order_id is required and must be at most 160 characters")
+        metadata = metadata or {}
+        if not isinstance(metadata, dict):
+            raise ValueError("order metadata must be an object")
+        with closing(self.ledger.connection()) as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM sim_account WHERE name=?", (account_name,)).fetchone()
+                if row is None:
+                    raise ValueError(f"unknown simulated account: {account_name}")
+                variant = SimVariant.from_json(row["variant_json"])
+                if variant.execution_minutes != 1:
+                    raise ValueError("broker orders require a one-minute execution profile")
+                prior = conn.execute(
+                    "SELECT * FROM sim_order WHERE account=? AND generation=? AND client_order_id=?",
+                    (account_name, row["generation"], client_order_id)).fetchone()
+                if prior:
+                    if (prior["signal"], prior["size"], prior["metadata_json"]) != (
+                            signal, size, _json(metadata)):
+                        raise ValueError("conflicting resubmission of broker order")
+                    return {"orderId": f"SIM-{prior['id']}", "status": prior["status"],
+                            "earliestFillTs": prior["earliest_fill_ts"]}
+                if row["status"] != "active" or (row["manual_paused"] and signal != "FLAT"):
+                    raise ValueError("simulated account is not accepting orders")
+                if signal != "FLAT":
+                    variant.bracket(size)
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                next_minute = now.hour * 60 + now.minute + 1
+                earliest = day_start + timedelta(minutes=next_minute)
+                old_pending = json.loads(row["pending_json"]) if row["pending_json"] else None
+                if old_pending and old_pending.get("order_id"):
+                    conn.execute("UPDATE sim_order SET status='replaced' WHERE id=? AND status='queued'",
+                                 (old_pending["order_id"],))
+                    self.ledger._event(conn, account_name, row["generation"], None,
+                                       "order_cancelled", {"order_id": f"SIM-{old_pending['order_id']}",
+                                                           "reason": "replaced"})
+                cursor = conn.execute(
+                    "INSERT INTO sim_order(account,generation,client_order_id,signal,size,available_at,"
+                    "earliest_fill_ts,status,metadata_json) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (account_name, row["generation"], client_order_id, signal, size,
+                     now.isoformat(), earliest.isoformat(), "queued", _json(metadata)))
+                order_id = cursor.lastrowid
+                pending = {"signal": signal, "size": size, "source_bar_ts": now.isoformat(),
+                           "earliest_fill_ts": earliest.isoformat(), "order_id": order_id}
+                conn.execute("UPDATE sim_account SET pending_json=?,updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                             (_json(pending), account_name))
+                self.ledger._event(conn, account_name, row["generation"], None,
+                                   "order_submitted", {"order_id": f"SIM-{order_id}",
+                                                       "signal": signal, "size": size,
+                                                       "available_at": now.isoformat(),
+                                                       "earliest_fill_ts": earliest.isoformat(),
+                                                       "metadata": metadata})
+                return {"orderId": f"SIM-{order_id}", "status": "queued",
+                        "earliestFillTs": earliest.isoformat()}
+
+    def cancel_order(self, account_name: str, order_id: str) -> bool:
+        """Cancel a pending market intent; filled orders and brackets are immutable."""
+        if not isinstance(order_id, str) or not order_id.startswith("SIM-"):
+            raise ValueError("invalid simulated order id")
+        try:
+            numeric_id = int(order_id[4:])
+        except ValueError as exc:
+            raise ValueError("invalid simulated order id") from exc
+        with closing(self.ledger.connection()) as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM sim_account WHERE name=?", (account_name,)).fetchone()
+                if row is None:
+                    raise ValueError(f"unknown simulated account: {account_name}")
+                order = conn.execute("SELECT status FROM sim_order WHERE id=? AND account=? AND generation=?",
+                                     (numeric_id, account_name, row["generation"])).fetchone()
+                if order is None:
+                    raise ValueError("unknown simulated order")
+                if order["status"] != "queued":
+                    return False
+                pending = json.loads(row["pending_json"]) if row["pending_json"] else None
+                if pending and pending.get("order_id") == numeric_id:
+                    conn.execute("UPDATE sim_account SET pending_json=NULL,updated_at=CURRENT_TIMESTAMP "
+                                 "WHERE name=?", (account_name,))
+                conn.execute("UPDATE sim_order SET status='cancelled' WHERE id=?", (numeric_id,))
+                self.ledger._event(conn, account_name, row["generation"], None,
+                                   "order_cancelled", {"order_id": order_id})
+                return True
+
     def process_bar(self, account_name: str, bar: Bar,
                     decision: dict[str, Any] | None = None) -> dict[str, Any]:
         bar_ts = bar.ts.astimezone(timezone.utc).isoformat()
@@ -187,9 +283,17 @@ class SimBroker:
                 if account.balance <= account.mll and account.status != "failed":
                     account.status = "failed"
                     event("risk", {"reason": "maximum_loss_realized", "balance": account.balance})
-                pending = json.loads(row["pending_json"]) if contiguous and row["pending_json"] else None
+                pending_before = json.loads(row["pending_json"]) if row["pending_json"] else None
+                first_gap = (last_ts is None and pending_before is not None and
+                             pending_before.get("earliest_fill_ts") is not None and
+                             bar.ts > utc(pending_before["earliest_fill_ts"]))
+                if pending_before and ((last_ts is not None and not contiguous) or first_gap) and pending_before.get("order_id"):
+                    conn.execute("UPDATE sim_order SET status='cancelled' WHERE id=? AND status='queued'",
+                                 (pending_before["order_id"],))
+                pending = pending_before if (last_ts is None or contiguous) and not first_gap else None
                 if pending and pending.get("earliest_fill_ts") and bar.ts < utc(pending["earliest_fill_ts"]):
                     pending = None
+                order_filled = False
                 if pending and account.status == "active":
                     signal = pending["signal"]
                     direction = 1 if signal == "BUY" else -1 if signal == "SELL" else 0
@@ -197,6 +301,7 @@ class SimBroker:
                         price = bar.open - account.position.direction * rules.slippage_ticks * TICK_SIZE
                         _exit(account, bar, price, "signal_flat" if signal == "FLAT" else "signal_reverse", rules)
                         event("exit_fill", {"signal": signal, "price": price})
+                        order_filled = True
                     if (direction and account.position is None and not row["manual_paused"]
                             and entry_allowed(bar.ts, variant.execution_minutes)):
                         bracket = variant.bracket(pending["size"])
@@ -214,7 +319,17 @@ class SimBroker:
                                                  "quantity": bracket.contracts, "price": price,
                                                  "stop": account.position.stop_price,
                                                  "target": account.position.target_price,
-                                                 "source_bar_ts": pending["source_bar_ts"]})
+                                                 "source_bar_ts": pending["source_bar_ts"],
+                                                 "order_id": (f"SIM-{pending['order_id']}"
+                                                              if pending.get("order_id") else None)})
+                            order_filled = True
+                if pending and pending.get("order_id"):
+                    conn.execute("UPDATE sim_order SET status=? WHERE id=? AND status='queued'",
+                                 ("filled" if order_filled else "cancelled", pending["order_id"]))
+                    event("order_filled" if order_filled else "order_cancelled",
+                          {"order_id": f"SIM-{pending['order_id']}",
+                           "signal": pending["signal"],
+                           "price": bar.open if order_filled else None})
                 if account.status in {"active", "paused_for_day"}:
                     _check_position(account, bar, rules, variant.execution_minutes)
                 if account.balance <= account.mll and account.status != "failed":
@@ -234,7 +349,8 @@ class SimBroker:
                 if account.status != row["status"]:
                     event("status_changed", {"from": row["status"], "to": account.status})
                 next_pending = (json.loads(row["pending_json"])
-                                if variant.execution_minutes != variant.minutes and contiguous and
+                                if variant.execution_minutes != variant.minutes and
+                                (last_ts is None or contiguous) and not first_gap and
                                 row["pending_json"] and pending is None else None)
                 if normalized["signal"] != "HOLD" and account.status == "active":
                     if normalized["signal"] == "FLAT":

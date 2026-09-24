@@ -163,6 +163,51 @@ def test_one_minute_gap_cancels_queued_decision(tmp_path):
     assert gap["position"] is None
 
 
+def test_broker_order_fills_after_submission_and_stop_uses_next_minute(tmp_path):
+    ledger = SimLedger(tmp_path / "broker.sqlite")
+    ledger.register((SimVariant("demo", "5m", "scheduler",
+                                {1: Bracket(1, 24, 48)}, "1m"),))
+    broker = SimBroker(ledger)
+
+    def minute(n, *, low=5999):
+        return Bar(START + timedelta(minutes=n), 6000, 6001, low, 6000)
+
+    broker.process_bar("demo", minute(0))
+    available = START + timedelta(minutes=1, seconds=20)
+    queued = broker.submit_order("demo", "BUY", 1, "decision-1", available_at=available,
+                                 metadata={"decision_id": "123"})
+    assert queued["status"] == "queued"
+    assert queued["earliestFillTs"] == (START + timedelta(minutes=2)).isoformat()
+    assert broker.submit_order("demo", "BUY", 1, "decision-1", available_at=available,
+                               metadata={"decision_id": "123"}) == queued
+    with pytest.raises(ValueError, match="conflicting"):
+        broker.submit_order("demo", "SELL", 1, "decision-1", available_at=available,
+                            metadata={"decision_id": "123"})
+    assert broker.process_bar("demo", minute(1))["position"] is None
+    entered = broker.process_bar("demo", minute(2))
+    assert entered["position"]["entry_price"] == 6000.25
+    stopped = broker.process_bar("demo", minute(3, low=5993))
+    assert stopped["trade_count"] == 1
+    with ledger.connection() as conn:
+        assert conn.execute("SELECT status FROM sim_order").fetchone()[0] == "filled"
+        assert conn.execute("SELECT reason FROM sim_trade").fetchone()[0] == "stop"
+
+
+def test_broker_order_is_cancelled_on_missing_execution_bar(tmp_path):
+    ledger = SimLedger(tmp_path / "broker.sqlite")
+    ledger.register((SimVariant("demo", "15m", "scheduler",
+                                {1: Bracket(1, 24, 48)}, "1m"),))
+    broker = SimBroker(ledger)
+    broker.process_bar("demo", Bar(START, 6000, 6001, 5999, 6000))
+    broker.submit_order("demo", "BUY", 1, "decision-1",
+                        available_at=START + timedelta(minutes=1, seconds=20))
+    gap = broker.process_bar("demo", Bar(START + timedelta(minutes=2), 6000, 6001, 5999, 6000))
+    assert gap["position"] is None
+    assert gap["pending"] is None
+    with ledger.connection() as conn:
+        assert conn.execute("SELECT status FROM sim_order").fetchone()[0] == "cancelled"
+
+
 def test_ambiguous_bar_and_intrabar_mll(tmp_path):
     ledger = SimLedger(tmp_path / "broker.sqlite")
     ledger.register((SimVariant("collision", "5m", "test", {1: Bracket(1, 4, 4)}),
