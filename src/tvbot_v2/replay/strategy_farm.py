@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_left
 import csv
 from datetime import datetime, timedelta, timezone
 import gzip
@@ -104,16 +105,29 @@ def merge_decision_feed(bars: list[Bar], db_path: str | Path,
     return result, metrics
 
 
-def _split_bounds(total: int) -> dict[str, tuple[int, int]]:
+def _split_bounds(bars: list[Bar], frozen: dict | None = None) -> dict[str, tuple[int, int]]:
+    total = len(bars)
+    if frozen is not None:
+        stamps = [bar.ts for bar in bars]
+        cutoffs = [datetime.fromisoformat(str(frozen[key]).replace("Z", "+00:00"))
+                   for key in ("train_end", "validation_end", "forward_start")]
+        if any(ts.tzinfo is None for ts in cutoffs) or cutoffs != sorted(cutoffs) or len(set(cutoffs)) != 3:
+            raise ValueError("frozen split cutoffs must be distinct, ordered, timezone-aware times")
+        a, b, c = (bisect_left(stamps, cutoff) for cutoff in cutoffs)
+        if not 0 < a < b < c <= total:
+            raise ValueError("frozen split cutoffs must leave nonempty train, validation, and test")
+        return {"train": (0, a), "validation": (a, b), "test": (b, c),
+                "forward": (c, total)}
     first = int(total * 0.70)
     second = int(total * 0.85)
     return {"train": (0, first), "validation": (first, second), "test": (second, total)}
 
 
 def evaluate_events(bars: list[Bar], candidates: list[Candidate],
-                    bar_minutes: int, horizons: tuple[int, ...] = HORIZONS) -> tuple[list[dict], dict]:
+                    bar_minutes: int, horizons: tuple[int, ...] = HORIZONS,
+                    frozen_splits: dict | None = None) -> tuple[list[dict], dict]:
     """Score next-open-to-future-close direction without crossing gaps or splits."""
-    bounds = _split_bounds(len(bars))
+    bounds = _split_bounds(bars, frozen_splits)
     outcomes: list[dict] = []
     skipped = {"split_boundary": 0, "data_gap": 0, "end_of_data": 0}
     interval = timedelta(minutes=bar_minutes)
@@ -154,8 +168,8 @@ def evaluate_events(bars: list[Bar], candidates: list[Candidate],
                 "directional_points": round(points, 4),
                 "positive": points > 0,
             })
-    return outcomes, {"bounds": {name: {"first_bar": bars[start].ts.isoformat(),
-                                        "last_bar": bars[end - 1].ts.isoformat()}
+    return outcomes, {"bounds": {name: {"first_bar": bars[start].ts.isoformat() if start < end else None,
+                                        "last_bar": bars[end - 1].ts.isoformat() if start < end else None}
                                   for name, (start, end) in bounds.items()},
                       "skipped": skipped}
 
@@ -193,11 +207,13 @@ def summarize(outcomes: list[dict], current_regime: str,
     return rows
 
 
-def build_study(bars: list[Bar], bar_minutes: int) -> tuple[dict, list[dict]]:
+def build_study(bars: list[Bar], bar_minutes: int,
+                frozen_splits: dict | None = None) -> tuple[dict, list[dict]]:
     if len(bars) < 150:
         raise ValueError("at least 150 bars needed for indicator warmup and holdouts")
     candidates = generate_candidates(bars)
-    outcomes, evaluation = evaluate_events(bars, candidates, bar_minutes)
+    outcomes, evaluation = evaluate_events(bars, candidates, bar_minutes,
+                                           frozen_splits=frozen_splits)
     # The latest regime must be derived independently of whether a signal fired.
     from tvbot_v2.strategy.indicator_farm import atr, ema
     closes = [bar.close for bar in bars]
@@ -224,6 +240,7 @@ def build_study(bars: list[Bar], bar_minutes: int) -> tuple[dict, list[dict]]:
                                 "feed_age_minutes_at_run": age_minutes,
                                 "feed_fresh_at_run": age_minutes <= 15},
              "candidate_count": len(candidates), "outcome_count": len(outcomes),
+             "split_mode": "frozen_forward" if frozen_splits else "rolling_exploratory",
              "evaluation": evaluation, "rows": rows,
              "validation_screen_30m": validation,
              "limitations": ["Directional outcomes exclude fees, slippage, stops, and bracket fills.",
@@ -234,7 +251,8 @@ def build_study(bars: list[Bar], bar_minutes: int) -> tuple[dict, list[dict]]:
 
 def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], quality: dict,
               summary: dict, outcomes: list[dict],
-              decision_feed_db: str | Path | None = None) -> Path:
+              decision_feed_db: str | Path | None = None,
+              frozen_splits: dict | None = None) -> Path:
     root = Path(output_root)
     root.mkdir(parents=True, exist_ok=True)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
@@ -256,6 +274,7 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
             "bar_tape_sha256": tape_digest.hexdigest(),
             "decision_feed_db": str(Path(decision_feed_db).resolve()) if decision_feed_db else None,
             "latest_decision_feed_bar": quality.get("decision_feed", {}).get("latest_feed_bar"),
+            "frozen_splits": frozen_splits,
             "signal_definition": "indicator_farm_v1", "horizons_bars": HORIZONS,
             "min_sample": MIN_SAMPLE, "simulation_only": True}, indent=2) + "\n")
         (stage / "quality.json").write_text(json.dumps(quality, indent=2) + "\n")
@@ -271,6 +290,7 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
                  f"Feed age at run: {summary['current_regime']['feed_age_minutes_at_run']} minutes "
                  f"({'fresh' if summary['current_regime']['feed_fresh_at_run'] else 'stale'})",
                  f"Candidate events: {summary['candidate_count']:,}", "",
+                 f"Split mode: {summary['split_mode']}.",
                  f"Source quality: {quality.get('malformed_or_late', 0)} late/malformed, "
                  f"{quality.get('conflicting_timestamps', 0)} conflicting timestamps, "
                  f"{quality.get('nonconsecutive_intervals', 0)} nonconsecutive intervals.",
@@ -300,6 +320,20 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
                          f"{'sufficient for a descriptive rate' if row['enough_samples'] else 'sparse'} |")
         if not current_rows:
             lines.append("| No historical test events in this regime | | | | |")
+        if summary["split_mode"] == "frozen_forward":
+            forward_rows = [row for row in summary["rows"] if row["split"] == "forward" and
+                            row["horizon_bars"] == 6 and row["regime"] == current_key]
+            forward_rows.sort(key=lambda row: (-row["events"], row["strategy"]))
+            lines += ["", "## New forward observations in this regime", "",
+                      "Only events after the frozen historical test window appear here.", "",
+                      "| Candidate rule | Events | Positive move | Sample |",
+                      "|---|---:|---:|---|"]
+            for row in forward_rows:
+                lines.append(f"| {row['strategy']} | {row['events']} | "
+                             f"{row['positive_rate']:.1%} | "
+                             f"{'descriptive' if row['enough_samples'] else 'sparse'} |")
+            if not forward_rows:
+                lines.append("| Waiting for eligible forward events | | | |")
         lines += ["", "## Interpretation", "",
                   "This ranks descriptive directional outcomes, not account profit. Signals are observed "
                   "on closed bars; the comparison enters at the next bar open and exits at a fixed horizon.",
@@ -323,12 +357,20 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--csv", help="Supabase tv_datafeed_<timeframe> CSV export")
     source.add_argument("--db", help="canonical v2 bar SQLite database")
     parser.add_argument("--decision-feed-db", help="read-only Pi broker cache of closed decision bars")
+    parser.add_argument("--splits", help="JSON with frozen train/validation/forward cutoffs")
     parser.add_argument("--timeframe", choices=("5m", "15m", "30m"), default="5m")
     parser.add_argument("--output", default="runs/strategy-farm")
     parser.add_argument("--max-bars", type=int, default=150_000)
     parser.add_argument("--max-feed-age-minutes", type=int,
                         help="fail before writing if the newest completed bar is older")
     args = parser.parse_args(argv)
+    frozen_splits = None
+    if args.splits:
+        if not args.csv:
+            parser.error("--splits currently requires a fixed CSV base snapshot")
+        frozen_splits = json.loads(Path(args.splits).read_text(encoding="utf-8"))
+        if hashlib.sha256(Path(args.csv).read_bytes()).hexdigest() != frozen_splits.get("base_source_sha256"):
+            parser.error("base snapshot hash disagrees with frozen split profile")
     if args.max_bars < 150 or (args.max_feed_age_minutes is not None and
                                args.max_feed_age_minutes < 0):
         parser.error("invalid resource/freshness limit")
@@ -343,12 +385,12 @@ def main(argv: list[str] | None = None) -> int:
         quality["bars_after_merge"] = len(bars)
     if len(bars) > args.max_bars:
         parser.error(f"{len(bars)} bars exceed --max-bars={args.max_bars}")
-    summary, outcomes = build_study(bars, int(args.timeframe[:-1]))
+    summary, outcomes = build_study(bars, int(args.timeframe[:-1]), frozen_splits)
     if (args.max_feed_age_minutes is not None and
             summary["current_regime"]["feed_age_minutes_at_run"] > args.max_feed_age_minutes):
         parser.error("newest completed bar is stale; no run written")
     run = write_run(args.output, args.csv or args.db, bars, quality, summary, outcomes,
-                    args.decision_feed_db)
+                    args.decision_feed_db, frozen_splits)
     print(json.dumps({"run": str(run), "bars": len(bars),
                       "candidates": summary["candidate_count"],
                       "outcomes": summary["outcome_count"],

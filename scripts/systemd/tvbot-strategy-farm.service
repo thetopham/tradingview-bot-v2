@@ -8,7 +8,7 @@ User=thetopham
 Group=thetopham
 WorkingDirectory=/home/thetopham/tradingview-bot-v2
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/home/thetopham/tradingview-bot-v2/.venv/bin/python -m tvbot_v2.replay.strategy_farm --csv data/strategy_farm/mes-5m-20260924T071359Z.csv --decision-feed-db data/sim_broker_local.sqlite --timeframe 5m --output runs/strategy-farm --max-bars 150000 --max-feed-age-minutes 20
+ExecStart=/home/thetopham/tradingview-bot-v2/.venv/bin/python -m tvbot_v2.replay.strategy_farm --csv data/strategy_farm/mes-5m-20260924T071359Z.csv --decision-feed-db data/sim_broker_local.sqlite --splits profiles/strategy-farm-splits.json --timeframe 5m --output runs/strategy-farm --max-bars 150000 --max-feed-age-minutes 20
 CPUQuota=50%
 MemoryMax=768M
 TimeoutStartSec=120

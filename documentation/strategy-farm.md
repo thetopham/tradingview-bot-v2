@@ -17,9 +17,12 @@ On the Pi, the legacy bridge already writes each closed 5m candle into the simul
 python -m tvbot_v2.replay.strategy_farm \
   --csv data/strategy_farm/mes-5m-20260924T071359Z.csv \
   --decision-feed-db data/sim_broker_local.sqlite \
+  --splits profiles/strategy-farm-splits.json \
   --timeframe 5m --output runs/strategy-farm \
   --max-bars 150000 --max-feed-age-minutes 20
 ```
+
+`profiles/strategy-farm-splits.json` freezes train and validation boundaries and sets 2026-09-24 07:15 UTC as the start of a separate forward bucket. It checks the base CSV hash. Without this profile, splits roll as the feed grows and are exploratory only. The historical test window was already inspected during initial development, so it cannot support a fresh confirmatory claim; only later forward observations can do that.
 
 `scripts/systemd/tvbot-strategy-farm.{service,timer}` runs this read-only study once each weekday near 09:00 America/Denver. The service is limited to half a CPU, 768 MB, and two minutes; it can write only its report directory. A stale feed fails before an artifact is written. The static base snapshot preserves January through September history; the broker cache appends new closed 5m bars. The cache must remain durable and gap checks still apply. The timer does not create demo accounts or send orders.
 

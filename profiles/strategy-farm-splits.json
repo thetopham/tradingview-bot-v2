@@ -1,0 +1,7 @@
+{
+  "train_end": "2026-06-16T22:25:00+00:00",
+  "validation_end": "2026-07-16T06:15:00+00:00",
+  "forward_start": "2026-09-24T07:15:00+00:00",
+  "base_source_sha256": "4f5383d1007d332eaefa66a32b74771d69d1f5e3c5bb960cf849661d96963db4",
+  "note": "Frozen after the initial exploratory report; historical test already inspected, so only later forward observations can support a fresh claim."
+}

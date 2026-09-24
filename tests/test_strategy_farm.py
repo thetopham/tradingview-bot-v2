@@ -91,3 +91,22 @@ def test_broker_decision_feed_merges_matching_bars_and_rejects_conflicts(tmp_pat
                       bars[-1].ts.isoformat()))
     with pytest.raises(ValueError, match="conflicting broker decision feed bar"):
         merge_decision_feed(bars, path, "5m")
+
+
+def test_frozen_splits_do_not_move_when_new_bars_arrive():
+    original = _bars(200)
+    grown = _bars(220)
+    splits = {"train_end": original[140].ts.isoformat(),
+              "validation_end": original[170].ts.isoformat(),
+              "forward_start": original[190].ts.isoformat()}
+    event = Candidate(175, "example", 1, "up", "normal")
+    before, bounds_before = evaluate_events(original, [event], 5, horizons=(3,),
+                                             frozen_splits=splits)
+    after, bounds_after = evaluate_events(grown, [event], 5, horizons=(3,),
+                                          frozen_splits=splits)
+    assert before == after
+    assert before[0]["split"] == "test"
+    assert bounds_before["bounds"]["test"] == bounds_after["bounds"]["test"]
+    forward, _ = evaluate_events(grown, [Candidate(195, "example", 1, "up", "normal")],
+                                 5, horizons=(3,), frozen_splits=splits)
+    assert forward[0]["split"] == "forward"
