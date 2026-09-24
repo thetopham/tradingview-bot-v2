@@ -23,6 +23,7 @@ logs/*
 reports/*
 data/*.sqlite
 data/*.sqlite-*
+data/strategy_farm/
 *.log
 
 # OS/editor
