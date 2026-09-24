@@ -285,6 +285,21 @@ def write_run(output_root: str | Path, source: str | Path, bars: list[Bar], qual
                          f"{row['positive_rate']:.1%} | {row['wilson_lower_95']:.1%} |")
         if not summary["validation_screen_30m"]:
             lines.append("| No rule has the required sample count | | | |")
+        current_key = (summary["current_regime"]["trend"] + "/" +
+                       summary["current_regime"]["volatility"])
+        current_rows = [row for row in summary["rows"] if row["split"] == "test" and
+                        row["horizon_bars"] == 6 and row["regime"] == current_key]
+        current_rows.sort(key=lambda row: (-row["events"], row["strategy"]))
+        lines += ["", f"## Latest observed regime: {current_key}", "",
+                  "Test-window 30-minute directional outcomes for historical bars with the same regime:",
+                  "", "| Candidate rule | Events | Positive move | Wilson lower 95% | Sample |",
+                  "|---|---:|---:|---:|---|"]
+        for row in current_rows:
+            lines.append(f"| {row['strategy']} | {row['events']} | "
+                         f"{row['positive_rate']:.1%} | {row['wilson_lower_95']:.1%} | "
+                         f"{'sufficient for a descriptive rate' if row['enough_samples'] else 'sparse'} |")
+        if not current_rows:
+            lines.append("| No historical test events in this regime | | | | |")
         lines += ["", "## Interpretation", "",
                   "This ranks descriptive directional outcomes, not account profit. Signals are observed "
                   "on closed bars; the comparison enters at the next bar open and exits at a fixed horizon.",
