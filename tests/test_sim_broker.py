@@ -113,9 +113,11 @@ def test_bad_decision_rolls_back_bar(tmp_path):
     assert broker.process_bar("a", bar(0), {"signal": "HOLD"})["last_bar_ts"]
 
 
-def test_30m_decision_fills_only_on_next_available_1m_open(tmp_path):
+@pytest.mark.parametrize("decision_minutes", [5, 15, 30])
+def test_decision_fills_only_on_next_available_1m_open(tmp_path, decision_minutes):
     ledger = SimLedger(tmp_path / "broker.sqlite")
-    setting = SimVariant("epsilon", "30m", "prodex", {1: Bracket(1, 24, 48)}, "1m")
+    timeframe = f"{decision_minutes}m"
+    setting = SimVariant("epsilon", timeframe, "prodex", {1: Bracket(1, 24, 48)}, "1m")
     ledger.register((setting,))
     broker = SimBroker(ledger)
 
@@ -124,25 +126,25 @@ def test_30m_decision_fills_only_on_next_available_1m_open(tmp_path):
                    prices.get("high", 6001), prices.get("low", 5999),
                    prices.get("close", 6000))
 
-    broker.process_bar("epsilon", minute(29))
-    available = START + timedelta(minutes=30, seconds=20)
+    broker.process_bar("epsilon", minute(decision_minutes - 1))
+    available = START + timedelta(minutes=decision_minutes, seconds=20)
     queued = broker.submit_decision("epsilon", START.isoformat(),
-                                    {"signal": "BUY", "size": 1, "timeframe": "30m"},
+                                    {"signal": "BUY", "size": 1, "timeframe": timeframe},
                                     available_at=available)
-    assert queued["pending"]["earliest_fill_ts"] == (START + timedelta(minutes=31)).isoformat()
+    assert queued["pending"]["earliest_fill_ts"] == (START + timedelta(minutes=decision_minutes + 1)).isoformat()
     assert broker.submit_decision("epsilon", START.isoformat(),
-                                  {"signal": "BUY", "size": 1, "timeframe": "30m"},
+                                  {"signal": "BUY", "size": 1, "timeframe": timeframe},
                                   available_at=available) == queued
     with pytest.raises(ValueError, match="conflicting"):
         broker.submit_decision("epsilon", START.isoformat(), {"signal": "SELL"},
                                available_at=available)
-    before = broker.process_bar("epsilon", minute(30))
+    before = broker.process_bar("epsilon", minute(decision_minutes))
     assert before["position"] is None
     assert before["pending"]["signal"] == "BUY"
-    filled = broker.process_bar("epsilon", minute(31))
-    assert filled["position"]["entry_ts"] == (START + timedelta(minutes=31)).isoformat()
+    filled = broker.process_bar("epsilon", minute(decision_minutes + 1))
+    assert filled["position"]["entry_ts"] == (START + timedelta(minutes=decision_minutes + 1)).isoformat()
     assert filled["position"]["entry_price"] == 6000.25
-    stopped = broker.process_bar("epsilon", minute(32, low=5993, close=5994))
+    stopped = broker.process_bar("epsilon", minute(decision_minutes + 2, low=5993, close=5994))
     assert stopped["position"] is None
     assert stopped["trade_count"] == 1
     with ledger.connection() as conn:

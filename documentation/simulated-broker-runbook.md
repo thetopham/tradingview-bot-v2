@@ -83,6 +83,8 @@ The BUY above queues an intent. The earliest fill is the next contiguous 30-minu
 
 For profiles with a faster execution feed, submit the closed strategy decision separately with `SimBroker.submit_decision`. It records when the decision became available and queues it for the next execution bar **open after that time**. Advance the account on each closed one-minute candle with `process_bar` and no decision. A missing minute cancels pending entries and flattens any open position at the last known close. This avoids filling a 1-minute candle whose open preceded the ProDex response.
 
+`profiles/multi-cadence-1m-execution.json` defines `practice_1m` (5m decisions) and `delta_1m` (15m decisions), complementing `epsilon_1m` (30m decisions). All three use one-minute execution and independent ledgers. Register these profiles with `init --portfolio`; existing accounts remain unchanged. The bridge's `SIM_FEED_ACCOUNTS` selects which accounts receive live bars, so old experiments can be retained without advancing on the live feed.
+
 `status` returns each account's balance, marked equity, end-of-day balance peak, current-day P&L, maximum-loss floor and remaining room, win rate, consecutive losses, open position, pending intent, and last `next_check`. The legacy bridge sends these fields as account context to a configured ProDex overseer.
 
 ## Rules and boundaries
