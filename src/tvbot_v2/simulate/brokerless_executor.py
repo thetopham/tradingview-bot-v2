@@ -54,6 +54,76 @@ class SimBroker:
     def __init__(self, ledger: SimLedger):
         self.ledger = ledger
 
+    def submit_decision(self, account_name: str, bar_ts: str,
+                        decision: dict[str, Any], *,
+                        available_at: datetime | None = None) -> dict[str, Any]:
+        """Queue a closed decision bar for the next execution open after it is available."""
+        decision_ts = utc(bar_ts)
+        now = available_at or datetime.now(timezone.utc)
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError("decision availability requires a timezone offset")
+        now = now.astimezone(timezone.utc)
+        with closing(self.ledger.connection()) as conn:
+            with conn:
+                conn.execute("BEGIN IMMEDIATE")
+                row = conn.execute("SELECT * FROM sim_account WHERE name=?", (account_name,)).fetchone()
+                if row is None:
+                    raise ValueError(f"unknown simulated account: {account_name}")
+                variant = SimVariant.from_json(row["variant_json"])
+                if variant.execution_minutes == variant.minutes:
+                    raise ValueError("account has no separate execution feed")
+                if decision_ts + timedelta(minutes=variant.minutes) > now:
+                    raise ValueError("decision bar is not closed yet")
+                normalized = normalize_decision(decision, account_name, variant.timeframe,
+                                                decision_ts.isoformat())
+                digest = hashlib.sha256(_json(normalized).encode()).hexdigest()
+                prior = conn.execute(
+                    "SELECT input_hash,snapshot_json FROM sim_decision WHERE account=? AND generation=? AND bar_ts=?",
+                    (account_name, row["generation"], decision_ts.isoformat())).fetchone()
+                if prior:
+                    if prior["input_hash"] != digest:
+                        raise ValueError("conflicting resubmission of decision")
+                    return json.loads(prior["snapshot_json"])
+                latest = conn.execute(
+                    "SELECT bar_ts FROM sim_decision WHERE account=? AND generation=? ORDER BY bar_ts DESC LIMIT 1",
+                    (account_name, row["generation"])).fetchone()
+                if latest and decision_ts <= utc(latest["bar_ts"]):
+                    raise ValueError("out-of-order decision")
+                day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+                elapsed_minutes = now.hour * 60 + now.minute
+                next_boundary = ((elapsed_minutes // variant.execution_minutes) + 1) * variant.execution_minutes
+                earliest = day_start + timedelta(minutes=next_boundary)
+                pending = None
+                if normalized["signal"] != "HOLD" and row["status"] == "active":
+                    if normalized["signal"] == "FLAT":
+                        if conn.execute("SELECT 1 FROM sim_position WHERE account=?",
+                                        (account_name,)).fetchone():
+                            pending = {"signal": "FLAT", "size": normalized["size"],
+                                       "source_bar_ts": decision_ts.isoformat(),
+                                       "earliest_fill_ts": earliest.isoformat()}
+                    elif not row["manual_paused"]:
+                        variant.bracket(normalized["size"])
+                        pending = {"signal": normalized["signal"], "size": normalized["size"],
+                                   "source_bar_ts": decision_ts.isoformat(),
+                                   "earliest_fill_ts": earliest.isoformat()}
+                conn.execute("UPDATE sim_account SET pending_json=?,next_check=?,"
+                             "updated_at=CURRENT_TIMESTAMP WHERE name=?",
+                             (_json(pending) if pending else None,
+                              normalized.get("next_check", ""), account_name))
+                self.ledger._event(conn, account_name, row["generation"],
+                                   decision_ts.isoformat(), "decision",
+                                   {**normalized, "queued": pending is not None,
+                                    "available_at": now.isoformat(),
+                                    "earliest_fill_ts": earliest.isoformat()})
+                updated = conn.execute("SELECT * FROM sim_account WHERE name=?", (account_name,)).fetchone()
+                snapshot = self.ledger._snapshot(conn, updated)
+                snapshot.update({"decision_bar_ts": decision_ts.isoformat(), "decision": normalized})
+                conn.execute("INSERT INTO sim_decision(account,generation,bar_ts,input_hash,decision_json,"
+                             "available_at,snapshot_json) VALUES (?,?,?,?,?,?,?)",
+                             (account_name, row["generation"], decision_ts.isoformat(),
+                              digest, _json(normalized), now.isoformat(), _json(snapshot)))
+                return snapshot
+
     def process_bar(self, account_name: str, bar: Bar,
                     decision: dict[str, Any] | None = None) -> dict[str, Any]:
         bar_ts = bar.ts.astimezone(timezone.utc).isoformat()
@@ -65,8 +135,10 @@ class SimBroker:
                     raise ValueError(f"unknown simulated account: {account_name}")
                 variant = SimVariant.from_json(row["variant_json"])
                 rules = CombineRules(**json.loads(row["rules_json"]))
-                if bar.ts + timedelta(minutes=variant.minutes) > datetime.now(timezone.utc):
+                if bar.ts + timedelta(minutes=variant.execution_minutes) > datetime.now(timezone.utc):
                     raise ValueError("bar is not closed yet")
+                if variant.execution_minutes != variant.minutes and decision is not None:
+                    raise ValueError("submit decisions separately for this account")
                 normalized = normalize_decision(decision, account_name, variant.timeframe, bar_ts)
                 bar_data = {"timestamp": bar_ts, "open": bar.open, "high": bar.high,
                             "low": bar.low, "close": bar.close, "volume": bar.volume}
@@ -94,7 +166,7 @@ class SimBroker:
                     self.ledger._event(conn, account_name, generation, bar_ts, kind, data)
 
                 day = trade_day(bar.ts)
-                contiguous = last_ts is not None and bar.ts - last_ts == timedelta(minutes=variant.minutes)
+                contiguous = last_ts is not None and bar.ts - last_ts == timedelta(minutes=variant.execution_minutes)
                 if last_ts is not None and (row["current_day"] != day.isoformat() or not contiguous):
                     if account.position is not None:
                         previous = Bar(last_ts, row["last_bar_close"], row["last_bar_close"],
@@ -116,6 +188,8 @@ class SimBroker:
                     account.status = "failed"
                     event("risk", {"reason": "maximum_loss_realized", "balance": account.balance})
                 pending = json.loads(row["pending_json"]) if contiguous and row["pending_json"] else None
+                if pending and pending.get("earliest_fill_ts") and bar.ts < utc(pending["earliest_fill_ts"]):
+                    pending = None
                 if pending and account.status == "active":
                     signal = pending["signal"]
                     direction = 1 if signal == "BUY" else -1 if signal == "SELL" else 0
@@ -124,7 +198,7 @@ class SimBroker:
                         _exit(account, bar, price, "signal_flat" if signal == "FLAT" else "signal_reverse", rules)
                         event("exit_fill", {"signal": signal, "price": price})
                     if (direction and account.position is None and not row["manual_paused"]
-                            and entry_allowed(bar.ts, variant.minutes)):
+                            and entry_allowed(bar.ts, variant.execution_minutes)):
                         bracket = variant.bracket(pending["size"])
                         fee = rules.round_turn_fee * bracket.contracts / 2
                         if account.balance - fee <= account.mll:
@@ -142,7 +216,7 @@ class SimBroker:
                                                  "target": account.position.target_price,
                                                  "source_bar_ts": pending["source_bar_ts"]})
                 if account.status in {"active", "paused_for_day"}:
-                    _check_position(account, bar, rules, variant.minutes)
+                    _check_position(account, bar, rules, variant.execution_minutes)
                 if account.balance <= account.mll and account.status != "failed":
                     account.status = "failed"
                     event("risk", {"reason": "maximum_loss_realized", "balance": account.balance})
@@ -159,24 +233,28 @@ class SimBroker:
                     event("risk", risk)
                 if account.status != row["status"]:
                     event("status_changed", {"from": row["status"], "to": account.status})
-                next_pending = None
+                next_pending = (json.loads(row["pending_json"])
+                                if variant.execution_minutes != variant.minutes and contiguous and
+                                row["pending_json"] and pending is None else None)
                 if normalized["signal"] != "HOLD" and account.status == "active":
                     if normalized["signal"] == "FLAT":
                         if account.position is not None:
                             next_pending = {"signal": "FLAT", "size": normalized["size"],
                                             "source_bar_ts": bar_ts}
-                    elif not row["manual_paused"] and entry_allowed(bar.ts, variant.minutes):
+                    elif not row["manual_paused"] and entry_allowed(bar.ts, variant.execution_minutes):
                         variant.bracket(normalized["size"])
                         next_pending = {"signal": normalized["signal"], "size": normalized["size"],
                                         "source_bar_ts": bar_ts}
-                event("decision", {**normalized, "queued": next_pending is not None})
+                if variant.execution_minutes == variant.minutes:
+                    event("decision", {**normalized, "queued": next_pending is not None})
                 conn.execute("UPDATE sim_account SET balance=?,mll=?,day_start_balance=?,day_pnl_json=?,"
                              "status=?,current_day=?,last_bar_ts=?,last_bar_close=?,pending_json=?,next_check=?,"
                              "updated_at=CURRENT_TIMESTAMP WHERE name=?",
                              (account.balance, account.mll, account.day_start_balance, _json(account.day_pnl),
                               account.status, day.isoformat(), bar_ts, bar.close,
                               _json(next_pending) if next_pending else None,
-                              normalized.get("next_check", ""), account_name))
+                              (row["next_check"] if variant.execution_minutes != variant.minutes
+                               else normalized.get("next_check", "")), account_name))
                 conn.execute("DELETE FROM sim_position WHERE account=?", (account_name,))
                 if account.position is not None:
                     p = account.position

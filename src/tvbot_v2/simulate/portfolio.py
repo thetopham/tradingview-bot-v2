@@ -26,18 +26,28 @@ class SimVariant:
     timeframe: str
     strategy_id: str
     brackets: dict[int, Bracket]
+    execution_timeframe: str | None = None
 
     def __post_init__(self) -> None:
         if (not self.name or not self.strategy_id or
                 not re.fullmatch(r"[1-9][0-9]*m", self.timeframe) or
                 int(self.timeframe[:-1]) > 1440):
             raise ValueError("invalid account variant")
+        if (self.execution_timeframe is not None and
+                (not re.fullmatch(r"[1-9][0-9]*m", self.execution_timeframe) or
+                 int(self.execution_timeframe[:-1]) > int(self.timeframe[:-1]) or
+                 int(self.timeframe[:-1]) % int(self.execution_timeframe[:-1]))):
+            raise ValueError("execution timeframe must divide decision timeframe")
         if not self.brackets or not set(self.brackets).issubset({1, 2, 3}):
             raise ValueError("bracket choices must use size codes 1, 2, or 3")
 
     @property
     def minutes(self) -> int:
         return int(self.timeframe[:-1])
+
+    @property
+    def execution_minutes(self) -> int:
+        return int((self.execution_timeframe or self.timeframe)[:-1])
 
     def bracket(self, size: int) -> Bracket:
         try:
@@ -46,14 +56,18 @@ class SimVariant:
             raise ValueError(f"size {size} is not enabled for {self.name}") from exc
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
+        data = asdict(self)
+        if self.execution_timeframe is None:
+            del data["execution_timeframe"]
+        return json.dumps(data, sort_keys=True, separators=(",", ":"))
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SimVariant":
         if not isinstance(data, dict):
             raise ValueError("account variant must be an object")
         brackets = {int(code): Bracket(**details) for code, details in data["brackets"].items()}
-        return cls(str(data["name"]), str(data["timeframe"]), str(data["strategy_id"]), brackets)
+        return cls(str(data["name"]), str(data["timeframe"]), str(data["strategy_id"]),
+                   brackets, data.get("execution_timeframe"))
 
     @classmethod
     def from_json(cls, value: str) -> "SimVariant":

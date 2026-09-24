@@ -51,6 +51,8 @@ def normalize_bar(row: dict[str, Any], source_table: str) -> dict[str, Any]:
     timeframe = str(_first(candidate, "timeframe", "tf") or source_table.rsplit("_", 1)[-1])
     if timeframe.isdigit():
         timeframe += "m"
+    if source_table == "tv_datafeed" and timeframe != "1m":
+        raise ValueError("tv_datafeed contains 1m MES bars only")
     if source_table.startswith("tv_datafeed_") and timeframe != source_table.removeprefix("tv_datafeed_"):
         raise ValueError("source table and row timeframe disagree")
     symbol = str(_first(candidate, "symbol", "ticker", "tickerid", "contract") or "").upper()
@@ -59,7 +61,7 @@ def normalize_bar(row: dict[str, Any], source_table: str) -> dict[str, Any]:
     if symbol != "MES":
         raise ValueError("only MES is supported by the first simulator")
     ts = _timestamp(_first(candidate, "timestamp", "bar_time", "time", "ts", "t"))
-    if source_table.startswith("tv_datafeed_") and "ts" in candidate and not any(
+    if (source_table == "tv_datafeed" or source_table.startswith("tv_datafeed_")) and "ts" in candidate and not any(
         key in candidate for key in ("timestamp", "bar_time", "time")
     ):
         # v1's ts is the n8n receipt time just after the bar CLOSE. Snap only
@@ -73,6 +75,8 @@ def normalize_bar(row: dict[str, Any], source_table: str) -> dict[str, Any]:
         close_time = received.replace(minute=close_minute, second=0, microsecond=0)
         if not 0 <= (received - close_time).total_seconds() <= 120:
             raise ValueError("feed receipt too late to infer bar close")
+        if source_table == "tv_datafeed" and (received - close_time).total_seconds() > 50:
+            raise ValueError("1m feed receipt too late to infer bar close")
         ts = (close_time - timedelta(minutes=minutes)).isoformat()
     values = [float(_first(candidate, full, short)) for full, short in
               (("open", "o"), ("high", "h"), ("low", "l"), ("close", "c"))]

@@ -1,0 +1,13 @@
+[
+  {
+    "name": "epsilon_1m",
+    "timeframe": "30m",
+    "execution_timeframe": "1m",
+    "strategy_id": "prodex_numeric_30m_1m_execution",
+    "brackets": {
+      "1": {"contracts": 1, "stop_ticks": 24, "target_ticks": 48},
+      "2": {"contracts": 2, "stop_ticks": 12, "target_ticks": 24},
+      "3": {"contracts": 3, "stop_ticks": 8, "target_ticks": 16}
+    }
+  }
+]
